@@ -49,4 +49,10 @@ def test_triton_scaled_dot_product_attention(example):
     exp = pytorch_attention(q, k, v, is_causal=is_causal)
     act = triton_attention(q, k, v, is_causal=is_causal)
     max_abs_diff = (exp - act).abs().max()
-    assert torch.allclose(exp, act, atol=1e-2, rtol=2e-2), f"{max_abs_diff=}"
+    if q.dtype in [torch.float16, torch.bfloat16]:
+        atol = 2e-2
+        rtol = 3e-2
+    else:
+        atol = 1e-5
+        rtol = 1e-4
+    assert torch.allclose(exp, act, atol=atol, rtol=rtol), f"{max_abs_diff=}"
