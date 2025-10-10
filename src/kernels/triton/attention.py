@@ -16,12 +16,12 @@ from jaxtyping import Float
             num_warps=num_warps,
             num_stages=num_stages
         )
-        for Q_TILE_SIZE in [32, 64]
-        for K_TILE_SIZE in [32, 64]
-        for num_warps in [1, 2, 4]
-        for num_stages in [1, 2, 3]
+        for Q_TILE_SIZE in [16, 32, 64, 128]
+        for K_TILE_SIZE in [16, 32, 64, 128]
+        for num_warps in [1, 2, 4, 8]
+        for num_stages in [1, 2, 3, 4]
     ],
-    key=["N_QUERIES", "N_KEYS"]
+    key=["N_QUERIES", "N_KEYS", "is_causal", "D", "PADDED_D"]
 )
 @triton.jit
 def triton_flash_attention_2_kernel(
@@ -100,7 +100,10 @@ def triton_flash_attention_2_kernel(
 
     q_pos = (q_start + q_rows)[:, None]
 
-    n_keys = N_KEYS if not is_causal else (query_index + 1) * Q_TILE_SIZE
+    if is_causal:
+        n_keys = tl.minimum(N_KEYS, (query_index + 1) * Q_TILE_SIZE)
+    else:
+        n_keys = N_KEYS
 
     for ki in range(tl.cdiv(n_keys, K_TILE_SIZE)):
         k_start = ki * K_TILE_SIZE
@@ -113,10 +116,8 @@ def triton_flash_attention_2_kernel(
         k_part = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         v_part = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
 
-        s_part = tl.dot(q_block, tl.permute(k_part, (1, 0)))
+        s_part = tl.dot(q_block, tl.trans(k_part))
         s_part = scale * s_part
-        s_part = tl.where(col_mask, s_part, -float("inf"))
-
         m_part = tl.max(s_part, axis=1)
         m_new = tl.maximum(m_block, m_part)
         p_part = tl.exp(s_part - m_new[:, None])
@@ -521,4 +522,3 @@ def scaled_dot_product_attention(
     is_causal: bool = False
 ):
     return FlashAttention2.apply(q, k, v, is_causal)
-
