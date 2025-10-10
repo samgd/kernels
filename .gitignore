@@ -1,0 +1,12 @@
+# Testing directories
+.hypothesis
+.pytest_cache
+
+# Virtual Environment
+.venv
+
+# Compiled Python byte code
+*.pyc
+
+## Cached files
+**/__pycache__/*
