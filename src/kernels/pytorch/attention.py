@@ -4,11 +4,12 @@ import einx
 import torch
 from jaxtyping import Float
 
+
 def scaled_dot_product_attention(
     q: Float[torch.Tensor, "... q_seq_len d"],
     k: Float[torch.Tensor, "... kv_seq_len d"],
     v: Float[torch.Tensor, "... kv_seq_len d"],
-    is_causal: bool = False
+    is_causal: bool = False,
 ) -> Float[torch.Tensor, "... q_seq_len d"]:
     s = einx.dot("... q_seq_len d, ... kv_seq_len d -> ... q_seq_len kv_seq_len", q, k)
 

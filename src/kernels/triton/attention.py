@@ -12,27 +12,40 @@ from jaxtyping import Float
             kwargs={
                 "Q_TILE_SIZE": Q_TILE_SIZE,
                 "K_TILE_SIZE": K_TILE_SIZE,
-            }, 
+            },
             num_warps=num_warps,
-            num_stages=num_stages
+            num_stages=num_stages,
         )
         for Q_TILE_SIZE in [16, 32, 64, 128]
         for K_TILE_SIZE in [16, 32, 64, 128]
         for num_warps in [1, 2, 4, 8]
         for num_stages in [1, 2, 3, 4]
     ],
-    key=["N_QUERIES", "N_KEYS", "is_causal", "D", "PADDED_D"]
+    key=["N_QUERIES", "N_KEYS", "is_causal", "D", "PADDED_D"],
 )
 @triton.jit
 def triton_flash_attention_2_kernel(
-    Q_ptr, K_ptr, V_ptr,
-    O_ptr, L_ptr,
-    stride_qb, stride_qq, stride_qd,
-    stride_kb, stride_kk, stride_kd,
-    stride_vb, stride_vk, stride_vd,
-    stride_ob, stride_oq, stride_od,
-    stride_lb, stride_lq,
-    N_QUERIES, N_KEYS,
+    Q_ptr,
+    K_ptr,
+    V_ptr,
+    O_ptr,
+    L_ptr,
+    stride_qb,
+    stride_qq,
+    stride_qd,
+    stride_kb,
+    stride_kk,
+    stride_kd,
+    stride_vb,
+    stride_vk,
+    stride_vd,
+    stride_ob,
+    stride_oq,
+    stride_od,
+    stride_lb,
+    stride_lq,
+    N_QUERIES,
+    N_KEYS,
     scale,
     is_causal: tl.constexpr,
     D: tl.constexpr,
@@ -44,16 +57,16 @@ def triton_flash_attention_2_kernel(
     batch_index = tl.program_id(1)
 
     Q_block_ptr = tl.make_block_ptr(
-        Q_ptr + batch_index*stride_qb,
+        Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
         strides=(stride_qq, stride_qd),
         offsets=(query_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, PADDED_D),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     K_block_ptr = tl.make_block_ptr(
-        K_ptr + batch_index*stride_kb,
+        K_ptr + batch_index * stride_kb,
         shape=(N_KEYS, D),
         strides=(stride_kk, stride_kd),
         offsets=(0, 0),
@@ -62,7 +75,7 @@ def triton_flash_attention_2_kernel(
     )
 
     V_block_ptr = tl.make_block_ptr(
-        V_ptr + batch_index*stride_vb,
+        V_ptr + batch_index * stride_vb,
         shape=(N_KEYS, D),
         strides=(stride_vk, stride_vd),
         offsets=(0, 0),
@@ -71,19 +84,19 @@ def triton_flash_attention_2_kernel(
     )
 
     O_block_ptr = tl.make_block_ptr(
-        O_ptr + batch_index*stride_ob,
+        O_ptr + batch_index * stride_ob,
         shape=(N_QUERIES, D),
         strides=(stride_oq, stride_od),
-        offsets=(query_index*Q_TILE_SIZE, 0),
+        offsets=(query_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, PADDED_D),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     L_block_ptr = tl.make_block_ptr(
-        L_ptr + batch_index*stride_lb,
+        L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
         strides=(stride_lq,),
-        offsets=(query_index*Q_TILE_SIZE,),
+        offsets=(query_index * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
         order=(0,),
     )
@@ -111,7 +124,7 @@ def triton_flash_attention_2_kernel(
         col_mask = (k_pos < N_KEYS)[None, :]
 
         if is_causal:
-            col_mask &= (k_pos[None, :] <= q_pos)
+            col_mask &= k_pos[None, :] <= q_pos
 
         k_part = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         v_part = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
@@ -135,7 +148,7 @@ def triton_flash_attention_2_kernel(
         o_block += o_part
 
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
-        V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))        
+        V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
 
     o = (o_block / l_block[:, None]).to(O_ptr.type.element_ty)
     tl.store(O_block_ptr, o, boundary_check=(0, 1))
@@ -157,7 +170,7 @@ def triton_flash_attention_2(Q, K, V, is_causal=False):
         assert PADDED_D is not None
     else:
         PADDED_D = D
-    
+
     O = torch.empty_like(Q)
     L = torch.empty(B, NQ, dtype=torch.float32, device=Q.device)
 
@@ -171,16 +184,29 @@ def triton_flash_attention_2(Q, K, V, is_causal=False):
 
     def grid(meta):
         return triton.cdiv(NQ, meta["Q_TILE_SIZE"]), B
-    
+
     triton_flash_attention_2_kernel[grid](
-        Q, K, V,
-        O, L,
-        stride_qb, stride_qq, stride_qd,
-        stride_kb, stride_kk, stride_kd,
-        stride_vb, stride_vk, stride_vd,
-        stride_ob, stride_oq, stride_od,
-        stride_lb, stride_lq,
-        NQ, NK,
+        Q,
+        K,
+        V,
+        O,
+        L,
+        stride_qb,
+        stride_qq,
+        stride_qd,
+        stride_kb,
+        stride_kk,
+        stride_kd,
+        stride_vb,
+        stride_vk,
+        stride_vd,
+        stride_ob,
+        stride_oq,
+        stride_od,
+        stride_lb,
+        stride_lq,
+        NQ,
+        NK,
         scale,
         is_causal,
         D,
@@ -192,56 +218,58 @@ def triton_flash_attention_2(Q, K, V, is_causal=False):
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            kwargs={"Q_TILE_SIZE": Q_TILE_SIZE}, 
-            num_warps=num_warps,
-            num_stages=num_stages
-        )
+        triton.Config(kwargs={"Q_TILE_SIZE": Q_TILE_SIZE}, num_warps=num_warps, num_stages=num_stages)
         for Q_TILE_SIZE in [32, 64, 128]
         for num_warps in [2, 4]
         for num_stages in [1, 2]
     ],
-    key=["N_QUERIES"]
+    key=["N_QUERIES"],
 )
 @triton.jit
 def triton_backward_dO_O_dot(
-    O_ptr, dO_ptr,
+    O_ptr,
+    dO_ptr,
     E_ptr,
-    stride_ob, stride_oq, stride_od,
-    stride_dob, stride_doq, stride_dod,
-    stride_eb, stride_eq,
+    stride_ob,
+    stride_oq,
+    stride_od,
+    stride_dob,
+    stride_doq,
+    stride_dod,
+    stride_eb,
+    stride_eq,
     N_QUERIES,
     D: tl.constexpr,
-    Q_TILE_SIZE: tl.constexpr
+    Q_TILE_SIZE: tl.constexpr,
 ):
     query_index = tl.program_id(0)
     batch_index = tl.program_id(1)
 
     O_block_ptr = tl.make_block_ptr(
-        O_ptr + batch_index*stride_ob,
+        O_ptr + batch_index * stride_ob,
         shape=(N_QUERIES, D),
         strides=(stride_oq, stride_od),
-        offsets=(query_index*Q_TILE_SIZE, 0),
+        offsets=(query_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     dO_block_ptr = tl.make_block_ptr(
-        dO_ptr + batch_index*stride_dob,
+        dO_ptr + batch_index * stride_dob,
         shape=(N_QUERIES, D),
         strides=(stride_doq, stride_dod),
-        offsets=(query_index*Q_TILE_SIZE, 0),
+        offsets=(query_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     E_block_ptr = tl.make_block_ptr(
-        E_ptr + batch_index*stride_eb,
+        E_ptr + batch_index * stride_eb,
         shape=(N_QUERIES,),
         strides=(stride_eq,),
-        offsets=(query_index*Q_TILE_SIZE,),
+        offsets=(query_index * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
-        order=(0,)
+        order=(0,),
     )
 
     dO_block = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero")
@@ -254,7 +282,7 @@ def triton_backward_dO_O_dot(
     e = tl.sum(e, axis=1)
 
     tl.store(E_block_ptr, e, boundary_check=(0,))
-    
+
 
 @triton.autotune(
     configs=[
@@ -262,9 +290,9 @@ def triton_backward_dO_O_dot(
             kwargs={
                 "Q_TILE_SIZE": Q_TILE_SIZE,
                 "K_TILE_SIZE": K_TILE_SIZE,
-            }, 
+            },
             num_warps=num_warps,
-            num_stages=num_stages
+            num_stages=num_stages,
         )
         for Q_TILE_SIZE in [32, 64, 128]
         for K_TILE_SIZE in [32, 64, 128]
@@ -276,21 +304,42 @@ def triton_backward_dO_O_dot(
 )
 @triton.jit
 def triton_flash_attention_2_backward_kernel(
-    Q_ptr, K_ptr, V_ptr,
+    Q_ptr,
+    K_ptr,
+    V_ptr,
     L_ptr,
     dO_ptr,
-    dQ_ptr, dK_ptr, dV_ptr,
+    dQ_ptr,
+    dK_ptr,
+    dV_ptr,
     E_ptr,
-    stride_qb, stride_qq, stride_qd,
-    stride_kb, stride_kk, stride_kd,
-    stride_vb, stride_vk, stride_vd,
-    stride_lb, stride_lq,
-    stride_dob, stride_doq, stride_dod,
-    stride_dqb, stride_dqq, stride_dqd,
-    stride_dkb, stride_dkk, stride_dkd,
-    stride_dvb, stride_dvk, stride_dvd,
-    stride_eb, stride_eq,
-    N_QUERIES, N_KEYS,
+    stride_qb,
+    stride_qq,
+    stride_qd,
+    stride_kb,
+    stride_kk,
+    stride_kd,
+    stride_vb,
+    stride_vk,
+    stride_vd,
+    stride_lb,
+    stride_lq,
+    stride_dob,
+    stride_doq,
+    stride_dod,
+    stride_dqb,
+    stride_dqq,
+    stride_dqd,
+    stride_dkb,
+    stride_dkk,
+    stride_dkd,
+    stride_dvb,
+    stride_dvk,
+    stride_dvd,
+    stride_eb,
+    stride_eq,
+    N_QUERIES,
+    N_KEYS,
     scale,
     is_causal: tl.constexpr,
     D: tl.constexpr,
@@ -301,21 +350,21 @@ def triton_flash_attention_2_backward_kernel(
     batch_index = tl.program_id(1)
 
     if is_causal:
-        q_base = (key_index*K_TILE_SIZE) // Q_TILE_SIZE
+        q_base = (key_index * K_TILE_SIZE) // Q_TILE_SIZE
     else:
         q_base = 0
 
     Q_block_ptr = tl.make_block_ptr(
-        Q_ptr + batch_index*stride_qb,
+        Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
         strides=(stride_qq, stride_qd),
-        offsets=(q_base*Q_TILE_SIZE, 0),
+        offsets=(q_base * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     K_block_ptr = tl.make_block_ptr(
-        K_ptr + batch_index*stride_kb,
+        K_ptr + batch_index * stride_kb,
         shape=(N_KEYS, D),
         strides=(stride_kk, stride_kd),
         offsets=(key_index * K_TILE_SIZE, 0),
@@ -324,7 +373,7 @@ def triton_flash_attention_2_backward_kernel(
     )
 
     V_block_ptr = tl.make_block_ptr(
-        V_ptr + batch_index*stride_vb,
+        V_ptr + batch_index * stride_vb,
         shape=(N_KEYS, D),
         strides=(stride_vk, stride_vd),
         offsets=(key_index * K_TILE_SIZE, 0),
@@ -333,25 +382,25 @@ def triton_flash_attention_2_backward_kernel(
     )
 
     L_block_ptr = tl.make_block_ptr(
-        L_ptr + batch_index*stride_lb,
+        L_ptr + batch_index * stride_lb,
         shape=(N_QUERIES,),
         strides=(stride_lq,),
-        offsets=(q_base*Q_TILE_SIZE,),
+        offsets=(q_base * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
         order=(0,),
     )
 
     dO_block_ptr = tl.make_block_ptr(
-        dO_ptr + batch_index*stride_dob,
+        dO_ptr + batch_index * stride_dob,
         shape=(N_QUERIES, D),
         strides=(stride_doq, stride_dod),
-        offsets=(q_base*Q_TILE_SIZE, 0),
+        offsets=(q_base * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     dK_block_ptr = tl.make_block_ptr(
-        dK_ptr + batch_index*stride_dkb,
+        dK_ptr + batch_index * stride_dkb,
         shape=(N_KEYS, D),
         strides=(stride_dkk, stride_dkd),
         offsets=(key_index * K_TILE_SIZE, 0),
@@ -360,7 +409,7 @@ def triton_flash_attention_2_backward_kernel(
     )
 
     dV_block_ptr = tl.make_block_ptr(
-        dV_ptr + batch_index*stride_dvb,
+        dV_ptr + batch_index * stride_dvb,
         shape=(N_KEYS, D),
         strides=(stride_dvk, stride_dvd),
         offsets=(key_index * K_TILE_SIZE, 0),
@@ -369,12 +418,12 @@ def triton_flash_attention_2_backward_kernel(
     )
 
     E_block_ptr = tl.make_block_ptr(
-        E_ptr + batch_index*stride_eb,
+        E_ptr + batch_index * stride_eb,
         shape=(N_QUERIES,),
         strides=(stride_eq,),
-        offsets=(q_base*Q_TILE_SIZE,),
+        offsets=(q_base * Q_TILE_SIZE,),
         block_shape=(Q_TILE_SIZE,),
-        order=(0,)
+        order=(0,),
     )
 
     k_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
@@ -386,18 +435,18 @@ def triton_flash_attention_2_backward_kernel(
     # Use manual indexing instead of make_block_ptr for dQ as it requires atomic_add
     dQ_base = dQ_ptr + batch_index * stride_dqb
 
-    k_start  = key_index * K_TILE_SIZE
+    k_start = key_index * K_TILE_SIZE
     k_pos = k_start + tl.arange(0, K_TILE_SIZE)
-    k_inb = k_pos < N_KEYS 
-    
-    for qi in range(q_base, tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
-        q0     = qi * Q_TILE_SIZE
-        rows   = q0 + tl.arange(0, Q_TILE_SIZE)[:, None]
-        cols   = tl.arange(0, D)[None, :]
-        row_m  = rows < N_QUERIES
-        dQ_ptrs = dQ_base + rows*stride_dqq + cols*stride_dqd
+    k_inb = k_pos < N_KEYS
 
-        q_part  = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    for qi in range(q_base, tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
+        q0 = qi * Q_TILE_SIZE
+        rows = q0 + tl.arange(0, Q_TILE_SIZE)[:, None]
+        cols = tl.arange(0, D)[None, :]
+        row_m = rows < N_QUERIES
+        dQ_ptrs = dQ_base + rows * stride_dqq + cols * stride_dqd
+
+        q_part = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
         dO_part = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero")
         l_part = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
         e_part = tl.load(E_block_ptr, boundary_check=(0,), padding_option="zero")
@@ -435,7 +484,7 @@ def triton_flash_attention_2_backward_kernel(
 
     tl.store(dK_block_ptr, dK_block, boundary_check=(0, 1))
     tl.store(dV_block_ptr, dV_block, boundary_check=(0, 1))
-    
+
 
 def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
     B, NQ, D = Q.shape
@@ -465,32 +514,59 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
 
     grid = lambda meta: (triton.cdiv(NQ, meta["Q_TILE_SIZE"]), B)
     triton_backward_dO_O_dot[grid](
-        O, dO,
+        O,
+        dO,
         E,
-        stride_ob, stride_oq, stride_od,
-        stride_dob, stride_doq, stride_dod,
-        stride_eb, stride_eq,
+        stride_ob,
+        stride_oq,
+        stride_od,
+        stride_dob,
+        stride_doq,
+        stride_dod,
+        stride_eb,
+        stride_eq,
         NQ,
         D,
     )
 
     grid = lambda grid: (triton.cdiv(NK, grid["K_TILE_SIZE"]), B)
     triton_flash_attention_2_backward_kernel[grid](
-        Q, K, V,
+        Q,
+        K,
+        V,
         L,
         dO,
-        dQ, dK, dV,
+        dQ,
+        dK,
+        dV,
         E,
-        stride_qb, stride_qq, stride_qd,
-        stride_kb, stride_kk, stride_kd,
-        stride_vb, stride_vk, stride_vd,
-        stride_lb, stride_lq,
-        stride_dob, stride_doq, stride_dod,
-        stride_dqb, stride_dqq, stride_dqd,
-        stride_dkb, stride_dkk, stride_dkd,
-        stride_dvb, stride_dvk, stride_dvd,
-        stride_eb, stride_eq,
-        NQ, NK,
+        stride_qb,
+        stride_qq,
+        stride_qd,
+        stride_kb,
+        stride_kk,
+        stride_kd,
+        stride_vb,
+        stride_vk,
+        stride_vd,
+        stride_lb,
+        stride_lq,
+        stride_dob,
+        stride_doq,
+        stride_dod,
+        stride_dqb,
+        stride_dqq,
+        stride_dqd,
+        stride_dkb,
+        stride_dkk,
+        stride_dkd,
+        stride_dvb,
+        stride_dvk,
+        stride_dvd,
+        stride_eb,
+        stride_eq,
+        NQ,
+        NK,
         scale,
         is_causal,
         D,
@@ -507,18 +583,18 @@ class FlashAttention2(torch.autograd.Function):
         out, L = triton_flash_attention_2(Q, K, V, is_causal)
         ctx.save_for_backward(Q, K, V, out, L, torch.tensor(is_causal))
         return out
-    
+
     @staticmethod
     def backward(ctx, grad_output):
         Q, K, V, O, L, is_causal = ctx.saved_tensors
         dQ, dK, dV = triton_flash_attention_2_backward(Q, K, V, O, L, grad_output, bool(is_causal))
         return dQ, dK, dV, None
-    
+
 
 def scaled_dot_product_attention(
     q: Float[torch.Tensor, "batch q_seq_len d"],
     k: Float[torch.Tensor, "batch kv_seq_len d"],
     v: Float[torch.Tensor, "batch kv_seq_len d"],
-    is_causal: bool = False
+    is_causal: bool = False,
 ):
     return FlashAttention2.apply(q, k, v, is_causal)

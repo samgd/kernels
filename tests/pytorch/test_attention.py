@@ -10,15 +10,19 @@ from kernels.triton.attention import scaled_dot_product_attention as triton_atte
 @st.composite
 def attention_examples(
     draw,
-    min_batch=1, max_batch=4,
-    min_q=1, max_q=257,
-    min_k=1, max_k=257,
-    min_d=16, max_d=256,
+    min_batch=1,
+    max_batch=4,
+    min_q=1,
+    max_q=257,
+    min_k=1,
+    max_k=257,
+    min_d=16,
+    max_d=256,
 ) -> tuple[
-        Float[torch.Tensor, "batch q_seq_len head_dim"],
-        Float[torch.Tensor, "batch kv_seq_len head_dim"],
-        Float[torch.Tensor, "batch kv_seq_len head_dim"],
-        bool
+    Float[torch.Tensor, "batch q_seq_len head_dim"],
+    Float[torch.Tensor, "batch kv_seq_len head_dim"],
+    Float[torch.Tensor, "batch kv_seq_len head_dim"],
+    bool,
 ]:
     batch = draw(st.integers(min_batch, max_batch))
     n_q = draw(st.integers(min_q, max_q))
