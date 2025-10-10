@@ -14,10 +14,16 @@ def scaled_dot_product_attention(
 
     s = s / math.sqrt(q.shape[-1])
 
-    m = einx.max("... q_seq_len [kv_seq_len]", s).values
-    s = (s - m.unsqueeze(-1)).exp()
-    d = einx.sum("... q_seq_len [kv_seq_len]", s, keepdims=True)
+    with torch.autocast(q.device.type, enabled=False):
+        s = s.float()
+        if is_causal:
+            mask = torch.tril(torch.ones(q.shape[-2], k.shape[-2], dtype=bool, device=s.device))
+            s = einx.where("q_seq_len kv_seq_len, ... q_seq_len kv_seq_len,", mask, s, -float("inf"))
 
-    p = s / d
+        m = einx.max("... q_seq_len [kv_seq_len]", s).values
+        s = (s - m.unsqueeze(-1)).exp()
+        d = einx.sum("... q_seq_len [kv_seq_len]", s, keepdims=True)
+        p = s / d
 
+    p = p.to(v.dtype)
     return einx.dot("... q_seq_len kv_seq_len, ... kv_seq_len d -> ... q_seq_len d", p, v)
