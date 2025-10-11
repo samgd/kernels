@@ -10,3 +10,6 @@
 
 ## Cached files
 **/__pycache__/*
+
+## pip/egg files
+**/*.egg-info
