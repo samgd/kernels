@@ -7,9 +7,18 @@ from jaxtyping import Float
 
 
 def get_padded_D(D: int) -> int:
+    """Returns the next power of 2 >= D but <= 256.
+
+    Args:
+        - D: The input hidden size to maybe pad.
+
+    Raises:
+        - ``ValueError`` if ``D`` is > 256.
+    """
+    if D > 256:
+        raise ValueError(f"Head Dimension {D} must be <= 256")
+
     if D not in [32, 64, 128, 256]:
-        if D > 256:
-            raise ValueError(f"Head Dimension {D} must be <= 256")
         PADDED_D = None
         for d in [32, 64, 128, 256]:
             if d > D:
@@ -595,7 +604,13 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
 
 class FlashAttention2(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, Q, K, V, is_causal):
+    def forward(
+        ctx,
+        Q: Float[torch.Tensor, "batch q_seq_len d"],
+        K: Float[torch.Tensor, "batch kv_seq_len d"],
+        V: Float[torch.Tensor, "batch kv_seq_len d"],
+        is_causal: bool,
+    ) -> Float[torch.Tensor, "batch q_seq_len d"]:
         assert Q.is_contiguous()
         assert K.is_contiguous()
         assert V.is_contiguous()
@@ -606,10 +621,17 @@ class FlashAttention2(torch.autograd.Function):
         return out
 
     @staticmethod
-    def backward(ctx, *grad_outputs):
+    def backward(
+        ctx, *grad_outputs: tuple[Float[torch.Tensor, "batch q_seq_len d"]]
+    ) -> tuple[
+        Float[torch.Tensor, "batch q_seq_len d"],
+        Float[torch.Tensor, "batch kv_seq_len d"],
+        Float[torch.Tensor, "batch kv_seq_len d"],
+        None,
+    ]:
         grad_output, *_ = grad_outputs
-        Q, K, V, O, L = ctx.saved_tensors
-        dQ, dK, dV = triton_flash_attention_2_backward(Q, K, V, O, L, grad_output, ctx.is_causal)
+        Q, K, V, out, L = ctx.saved_tensors
+        dQ, dK, dV = triton_flash_attention_2_backward(Q, K, V, out, L, grad_output, ctx.is_causal)
         return dQ, dK, dV, None
 
 
@@ -618,6 +640,13 @@ def scaled_dot_product_attention(
     k: Float[torch.Tensor, "batch kv_seq_len d"],
     v: Float[torch.Tensor, "batch kv_seq_len d"],
     is_causal: bool = False,
-):
-    """ """
-    return FlashAttention2.apply(q, k, v, is_causal)
+) -> Float[torch.Tensor, "batch q_seq_len d"]:
+    """Computes scaled dot production attention.
+
+    Args:
+        q: Query tensor.
+        k: Key tensor.
+        v: Value tensor.
+        is_causal: If True the query at index i can only attend to keys/values at indices <= i.
+    """
+    return FlashAttention2.apply(q, k, v, is_causal)  # type: ignore
