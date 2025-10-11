@@ -6,6 +6,21 @@ import triton.language as tl
 from jaxtyping import Float
 
 
+def get_padded_D(D: int) -> int:
+    if D not in [32, 64, 128, 256]:
+        if D > 256:
+            raise ValueError(f"Head Dimension {D} must be <= 256")
+        PADDED_D = None
+        for d in [32, 64, 128, 256]:
+            if d > D:
+                PADDED_D = d
+                break
+        assert PADDED_D is not None
+    else:
+        PADDED_D = D
+    return PADDED_D
+
+
 @triton.autotune(
     configs=[
         triton.Config(
@@ -21,7 +36,7 @@ from jaxtyping import Float
         for num_warps in [1, 2, 4, 8]
         for num_stages in [1, 2, 3, 4]
     ],
-    key=["N_QUERIES", "N_KEYS", "is_causal", "D", "PADDED_D"],
+    key=["N_QUERIES", "N_KEYS", "is_causal", "PADDED_D"],
 )
 @triton.jit
 def triton_flash_attention_2_kernel(
@@ -131,10 +146,10 @@ def triton_flash_attention_2_kernel(
 
         s_part = tl.dot(q_block, tl.trans(k_part))
         s_part = scale * s_part
+        s_part = tl.where(col_mask, s_part, -float("inf"))
         m_part = tl.max(s_part, axis=1)
         m_new = tl.maximum(m_block, m_part)
         p_part = tl.exp(s_part - m_new[:, None])
-        p_part = tl.where(col_mask, p_part, 0.0)
         l_part = tl.sum(p_part, axis=1)
 
         sc = tl.exp(m_block - m_new)
@@ -159,17 +174,7 @@ def triton_flash_attention_2(Q, K, V, is_causal=False):
     B, NQ, D = Q.shape
     _, NK, _ = K.shape
 
-    if D not in [32, 64, 128, 256]:
-        if D > 256:
-            raise ValueError(f"Head Dimension {D} must be <= 256")
-        PADDED_D = None
-        for d in [32, 64, 128, 256]:
-            if d > D:
-                PADDED_D = d
-                break
-        assert PADDED_D is not None
-    else:
-        PADDED_D = D
+    PADDED_D = get_padded_D(D)
 
     O = torch.empty_like(Q)
     L = torch.empty(B, NQ, dtype=torch.float32, device=Q.device)
@@ -219,11 +224,11 @@ def triton_flash_attention_2(Q, K, V, is_causal=False):
 @triton.autotune(
     configs=[
         triton.Config(kwargs={"Q_TILE_SIZE": Q_TILE_SIZE}, num_warps=num_warps, num_stages=num_stages)
-        for Q_TILE_SIZE in [32, 64, 128]
-        for num_warps in [2, 4]
-        for num_stages in [1, 2]
+        for Q_TILE_SIZE in [16, 32, 64, 128]
+        for num_warps in [1, 2, 4, 8]
+        for num_stages in [1, 2, 3, 4]
     ],
-    key=["N_QUERIES"],
+    key=["N_QUERIES", "PADDED_D"],
 )
 @triton.jit
 def triton_backward_dO_O_dot(
@@ -240,6 +245,7 @@ def triton_backward_dO_O_dot(
     stride_eq,
     N_QUERIES,
     D: tl.constexpr,
+    PADDED_D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
 ):
     query_index = tl.program_id(0)
@@ -250,7 +256,7 @@ def triton_backward_dO_O_dot(
         shape=(N_QUERIES, D),
         strides=(stride_oq, stride_od),
         offsets=(query_index * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
+        block_shape=(Q_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -259,7 +265,7 @@ def triton_backward_dO_O_dot(
         shape=(N_QUERIES, D),
         strides=(stride_doq, stride_dod),
         offsets=(query_index * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
+        block_shape=(Q_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -294,12 +300,12 @@ def triton_backward_dO_O_dot(
             num_warps=num_warps,
             num_stages=num_stages,
         )
-        for Q_TILE_SIZE in [32, 64, 128]
-        for K_TILE_SIZE in [32, 64, 128]
-        for num_warps in [1, 2, 4]
-        for num_stages in [1, 2]
+        for Q_TILE_SIZE in [16, 32, 64, 128]
+        for K_TILE_SIZE in [16, 32, 64, 128]
+        for num_warps in [1, 2, 4, 8]
+        for num_stages in [1, 2, 3, 4]
     ],
-    key=["N_QUERIES", "N_KEYS"],
+    key=["N_QUERIES", "N_KEYS", "PADDED_D"],
     reset_to_zero=["dQ_ptr"],
 )
 @triton.jit
@@ -343,6 +349,7 @@ def triton_flash_attention_2_backward_kernel(
     scale,
     is_causal: tl.constexpr,
     D: tl.constexpr,
+    PADDED_D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
 ):
@@ -359,7 +366,7 @@ def triton_flash_attention_2_backward_kernel(
         shape=(N_QUERIES, D),
         strides=(stride_qq, stride_qd),
         offsets=(q_base * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
+        block_shape=(Q_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -368,7 +375,7 @@ def triton_flash_attention_2_backward_kernel(
         shape=(N_KEYS, D),
         strides=(stride_kk, stride_kd),
         offsets=(key_index * K_TILE_SIZE, 0),
-        block_shape=(K_TILE_SIZE, D),
+        block_shape=(K_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -377,7 +384,7 @@ def triton_flash_attention_2_backward_kernel(
         shape=(N_KEYS, D),
         strides=(stride_vk, stride_vd),
         offsets=(key_index * K_TILE_SIZE, 0),
-        block_shape=(K_TILE_SIZE, D),
+        block_shape=(K_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -395,7 +402,7 @@ def triton_flash_attention_2_backward_kernel(
         shape=(N_QUERIES, D),
         strides=(stride_doq, stride_dod),
         offsets=(q_base * Q_TILE_SIZE, 0),
-        block_shape=(Q_TILE_SIZE, D),
+        block_shape=(Q_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -404,7 +411,7 @@ def triton_flash_attention_2_backward_kernel(
         shape=(N_KEYS, D),
         strides=(stride_dkk, stride_dkd),
         offsets=(key_index * K_TILE_SIZE, 0),
-        block_shape=(K_TILE_SIZE, D),
+        block_shape=(K_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -413,7 +420,7 @@ def triton_flash_attention_2_backward_kernel(
         shape=(N_KEYS, D),
         strides=(stride_dvk, stride_dvd),
         offsets=(key_index * K_TILE_SIZE, 0),
-        block_shape=(K_TILE_SIZE, D),
+        block_shape=(K_TILE_SIZE, PADDED_D),
         order=(1, 0),
     )
 
@@ -429,8 +436,8 @@ def triton_flash_attention_2_backward_kernel(
     k_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
     v_block = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
 
-    dK_block = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
-    dV_block = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
+    dK_block = tl.zeros((K_TILE_SIZE, PADDED_D), dtype=tl.float32)
+    dV_block = tl.zeros((K_TILE_SIZE, PADDED_D), dtype=tl.float32)
 
     # Use manual indexing instead of make_block_ptr for dQ as it requires atomic_add
     dQ_base = dQ_ptr + batch_index * stride_dqb
@@ -442,7 +449,7 @@ def triton_flash_attention_2_backward_kernel(
     for qi in range(q_base, tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
         q0 = qi * Q_TILE_SIZE
         rows = q0 + tl.arange(0, Q_TILE_SIZE)[:, None]
-        cols = tl.arange(0, D)[None, :]
+        cols = tl.arange(0, PADDED_D)[None, :]
         row_m = rows < N_QUERIES
         dQ_ptrs = dQ_base + rows * stride_dqq + cols * stride_dqd
 
@@ -490,7 +497,10 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
     B, NQ, D = Q.shape
     _, NK, _ = K.shape
 
-    dQ = torch.zeros(Q.shape, dtype=torch.float32, device=Q.device)
+    PADDED_D = get_padded_D(D)
+
+    # PADDED_D for dQ, many global load/stores so power of 2 beneficial
+    dQ = torch.zeros((*Q.shape[:-1], PADDED_D), dtype=torch.float32, device=Q.device)
     dK = torch.empty_like(K)
     dV = torch.empty_like(V)
 
@@ -512,8 +522,10 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
 
     scale = 1 / math.sqrt(D)
 
-    grid = lambda meta: (triton.cdiv(NQ, meta["Q_TILE_SIZE"]), B)
-    triton_backward_dO_O_dot[grid](
+    def grid_dO_O(meta):
+        return triton.cdiv(NQ, meta["Q_TILE_SIZE"]), B
+
+    triton_backward_dO_O_dot[grid_dO_O](
         O,
         dO,
         E,
@@ -527,10 +539,13 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
         stride_eq,
         NQ,
         D,
+        PADDED_D,
     )
 
-    grid = lambda grid: (triton.cdiv(NK, grid["K_TILE_SIZE"]), B)
-    triton_flash_attention_2_backward_kernel[grid](
+    def grid_bwd(meta):
+        return triton.cdiv(NK, meta["K_TILE_SIZE"]), B
+
+    triton_flash_attention_2_backward_kernel[grid_bwd](
         Q,
         K,
         V,
@@ -570,9 +585,10 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
         scale,
         is_causal,
         D,
+        PADDED_D,
     )
 
-    dQ = dQ.to(Q.dtype)
+    dQ = dQ[..., :D].to(Q.dtype)
 
     return dQ, dK, dV
 
@@ -580,14 +596,20 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
 class FlashAttention2(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal):
+        assert Q.is_contiguous()
+        assert K.is_contiguous()
+        assert V.is_contiguous()
+
         out, L = triton_flash_attention_2(Q, K, V, is_causal)
-        ctx.save_for_backward(Q, K, V, out, L, torch.tensor(is_causal))
+        ctx.save_for_backward(Q, K, V, out, L)
+        ctx.is_causal = is_causal
         return out
 
     @staticmethod
-    def backward(ctx, grad_output):
-        Q, K, V, O, L, is_causal = ctx.saved_tensors
-        dQ, dK, dV = triton_flash_attention_2_backward(Q, K, V, O, L, grad_output, bool(is_causal))
+    def backward(ctx, *grad_outputs):
+        grad_output, *_ = grad_outputs
+        Q, K, V, O, L = ctx.saved_tensors
+        dQ, dK, dV = triton_flash_attention_2_backward(Q, K, V, O, L, grad_output, ctx.is_causal)
         return dQ, dK, dV, None
 
 
@@ -597,4 +619,5 @@ def scaled_dot_product_attention(
     v: Float[torch.Tensor, "batch kv_seq_len d"],
     is_causal: bool = False,
 ):
+    """ """
     return FlashAttention2.apply(q, k, v, is_causal)
