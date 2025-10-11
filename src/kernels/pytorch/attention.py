@@ -18,11 +18,11 @@ def scaled_dot_product_attention(
     with torch.autocast(q.device.type, enabled=False):
         s = s.float()
         if is_causal:
-            mask = torch.tril(torch.ones(q.shape[-2], k.shape[-2], dtype=bool, device=s.device))
+            mask = torch.tril(torch.ones(q.shape[-2], k.shape[-2], dtype=torch.bool, device=s.device))
             s = einx.where("q_seq_len kv_seq_len, ... q_seq_len kv_seq_len,", mask, s, -float("inf"))
 
-        m = einx.max("... q_seq_len [kv_seq_len]", s).values
-        s = (s - m.unsqueeze(-1)).exp()
+        m = einx.max("... q_seq_len [kv_seq_len]", s).values  # type: ignore
+        s = (s - m.unsqueeze(-1)).exp()  # type: ignore
         d = einx.sum("... q_seq_len [kv_seq_len]", s, keepdims=True)
         p = s / d
 
