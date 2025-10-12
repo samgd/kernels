@@ -8,8 +8,11 @@
 # Compiled Python byte code
 *.pyc
 
-## Cached files
+# Cached files
 **/__pycache__/*
 
-## pip/egg files
+# pip/egg files
 **/*.egg-info
+
+# Benchmarking
+benchmarks
