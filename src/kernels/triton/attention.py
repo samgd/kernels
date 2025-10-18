@@ -4,6 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from jaxtyping import Float
+from torch.amp import custom_fwd, custom_bwd  # type: ignore
 
 
 def get_padded_D(D: int) -> int:
@@ -463,7 +464,7 @@ def triton_flash_attention_2_backward_kernel(
         dQ_ptrs = dQ_base + rows * stride_dqq + cols * stride_dqd
 
         q_part = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
-        dO_part = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero")
+        dO_part = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero").to(Q_ptr.type.element_ty)
         l_part = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
         e_part = tl.load(E_block_ptr, boundary_check=(0,), padding_option="zero")
 
@@ -477,7 +478,7 @@ def triton_flash_attention_2_backward_kernel(
 
         p_part = tl.exp(s_part - l_part[:, None])
 
-        dV_block += tl.dot(tl.trans(p_part).to(dO_ptr.type.element_ty), dO_part)
+        dV_block += tl.dot(tl.trans(p_part).to(K_ptr.type.element_ty), dO_part)
 
         dP = tl.dot(dO_part, tl.trans(v_block))
 
@@ -604,6 +605,7 @@ def triton_flash_attention_2_backward(Q, K, V, O, L, dO, is_causal=False):
 
 class FlashAttention2(torch.autograd.Function):
     @staticmethod
+    @custom_fwd(device_type="cuda")
     def forward(
         ctx,
         Q: Float[torch.Tensor, "batch q_seq_len d"],
@@ -615,12 +617,16 @@ class FlashAttention2(torch.autograd.Function):
         assert K.is_contiguous()
         assert V.is_contiguous()
 
+        assert Q.dtype == K.dtype
+        assert K.dtype == V.dtype
+
         out, L = triton_flash_attention_2(Q, K, V, is_causal)
         ctx.save_for_backward(Q, K, V, out, L)
         ctx.is_causal = is_causal
         return out
 
     @staticmethod
+    @custom_bwd(device_type="cuda")
     def backward(
         ctx, *grad_outputs: tuple[Float[torch.Tensor, "batch q_seq_len d"]]
     ) -> tuple[
