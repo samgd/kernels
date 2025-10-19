@@ -12,7 +12,7 @@ Paper: [link](https://arxiv.org/abs/2307.08691)
 
 ##### Forward
 
-![Attention Forward Speed](https://github.com/samgd/kernels/blob/main/fa2_fwd.svg?raw=true)
+![Attention Forward Speed](https://github.com/samgd/kernels/blob/main/assets/fa2_fwd.svg?raw=true)
 
 ##### Backward
 
