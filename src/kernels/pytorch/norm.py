@@ -17,8 +17,16 @@ class RMSNorm(torch.nn.Module):
         self.eps = eps
 
     def forward(self, x: Float[torch.Tensor, "... hidden_size"]) -> Float[torch.Tensor, "... hidden_size"]:
-        input_dtype = x.dtype
-        x = x.float()
-        mean_sq = einx.mean("... [hidden_size]", x.square(), keepdims=True)
-        irms = torch.rsqrt(self.eps + mean_sq)
-        return (self.weight.float() * (x * irms)).to(input_dtype)
+        return rms_norm(x, self.weight, self.eps)
+
+
+def rms_norm(
+    x: Float[torch.Tensor, "... hidden_size"],
+    weight: Float[torch.Tensor, "hidden_size"],
+    eps: float = 1e-5,
+) -> Float[torch.Tensor, "... hidden_size"]:
+    input_dtype = x.dtype
+    x = x.float()
+    mean_sq = einx.mean("... [hidden_size]", x.square(), keepdims=True)
+    irms = torch.rsqrt(mean_sq + eps)
+    return (weight.float() * (irms * x)).to(input_dtype)
