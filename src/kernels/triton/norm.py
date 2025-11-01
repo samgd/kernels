@@ -106,7 +106,7 @@ def rms_norm_kernel(
 
 
 def _rms_norm(
-    x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, "hidden_size"], eps: float = 1e-5
+    x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, " hidden_size"], eps: float = 1e-5
 ) -> Float[torch.Tensor, "... hidden_size"]:
     *dims, hidden_size = x.shape
     batch_total = prod(dims)
@@ -294,7 +294,7 @@ def _rms_norm_backward_kernel(
 def _rms_norm_backward(
     grad_output: Float[torch.Tensor, "... hidden_size"],
     x: Float[torch.Tensor, "... hidden_size"],
-    weight: Float[torch.Tensor, "hidden_size"],
+    weight: Float[torch.Tensor, " hidden_size"],
     eps: float,
 ) -> tuple[Float[torch.Tensor, "... hidden_size"], Float[torch.Tensor, "... hidden_size"]]:
     *dims, hidden_size = x.shape
@@ -340,14 +340,14 @@ def _rms_norm_backward(
 class _RMSNorm(torch.autograd.Function):
     @staticmethod
     def forward(
-        ctx, x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, "hidden_size"], eps: float = 1e-5
+        ctx, x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, " hidden_size"], eps: float = 1e-5
     ) -> Float[torch.Tensor, "... hidden_size"]:
         ctx.save_for_backward(x, weight)
         ctx.eps = eps
         return _rms_norm(x, weight, eps)
 
     @staticmethod
-    def backward(
+    def backward(  # type: ignore
         ctx,
         grad_output: Float[torch.Tensor, "... hidden_size"],
     ) -> tuple[Float[torch.Tensor, "... hidden_size"], Float[torch.Tensor, "... hidden_size"], None]:
@@ -357,6 +357,6 @@ class _RMSNorm(torch.autograd.Function):
 
 
 def rms_norm(
-    x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, "hidden_size"], eps: float = 1e-5
+    x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, " hidden_size"], eps: float = 1e-5
 ) -> Float[torch.Tensor, "... hidden_size"]:
     return _RMSNorm.apply(x, weight, eps)  # type: ignore
