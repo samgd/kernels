@@ -22,7 +22,7 @@ class RMSNorm(torch.nn.Module):
 
 def rms_norm(
     x: Float[torch.Tensor, "... hidden_size"],
-    weight: Float[torch.Tensor, "hidden_size"],
+    weight: Float[torch.Tensor, " hidden_size"],
     eps: float = 1e-5,
 ) -> Float[torch.Tensor, "... hidden_size"]:
     input_dtype = x.dtype
