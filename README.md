@@ -1,6 +1,13 @@
 # Kernels
 
-A library of kernels written in various Python-based languages as a learning exercise. 
+A library of kernels written in various Python-based languages.
+
+- [Attention](https://github.com/samgd/kernels#attention)
+  - [FlashAttention-2](https://github.com/samgd/kernels#flashattention-2)
+- [Normalization](https://github.com/samgd/kernels#normalization)
+  - [RMSNorm](https://github.com/samgd/kernels#rmsnorm)
+- Position Embedding
+  - Rotary Position Embedding (RoPE)
 
 ## Attention
 
@@ -37,3 +44,13 @@ The Triton forwards pass loads the input vector with shape `[batch_size, n_token
 ##### Backward
 
 ![RMSNorm Backward Speed](https://github.com/samgd/kernels/blob/main/assets/rms_norm_bwd.svg?raw=true)
+
+## Position Embedding
+
+### Rotary Position Embedding (RoPE)
+
+#### Triton
+
+##### Forward
+
+##### Backward
