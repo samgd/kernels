@@ -5,12 +5,7 @@ import triton
 import triton.language as tl
 from jaxtyping import Float
 
-
-def angular_freqs(
-    head_dim: int, base: float = 10_000.0, device: torch.device | None = None, dtype: torch.dtype = torch.float32
-) -> Float[torch.Tensor, " half_head_dim"]:
-    j = torch.arange(head_dim // 2, device=device, dtype=torch.float32)
-    return (base ** ((-2 / head_dim) * j)).to(dtype)
+from kernels.pytorch.rotary import angular_freqs
 
 
 class RotaryEmbedding(torch.nn.Module):
@@ -33,7 +28,7 @@ class RotaryEmbedding(torch.nn.Module):
 
     def _get_cos_sin(
         self, seq_len: int, device: torch.device, dtype: torch.dtype
-    ) -> tuple[Float[torch.Tensor, "seq_len 1 1 half_head_dim"], Float[torch.Tensor, "seq_len 1 1 half_head_dim"]]:
+    ) -> tuple[Float[torch.Tensor, "seq_len half_head_dim"], Float[torch.Tensor, "seq_len half_head_dim"]]:
         if self._cos is not None and self._cos.dtype == dtype and self._cos.shape[0] >= seq_len:
             if device is not None:
                 self._cos = self._cos.to(device)
@@ -55,6 +50,18 @@ class RotaryEmbedding(torch.nn.Module):
         return rotary_embedding(x, cos, sin)
 
 
+@triton.autotune(
+    configs=[
+        triton.Config(
+            kwargs={"HALF_HEAD_DIM_TILE_SIZE": HALF_HEAD_DIM_TILE_SIZE},
+            num_warps=num_warps,
+            num_stages=1,
+        )
+        for HALF_HEAD_DIM_TILE_SIZE in [64, 128, 256]
+        for num_warps in [2, 4, 8]
+    ],
+    key=["HALF_HEAD_DIM"],
+)
 @triton.jit
 def rotary_embedding_kernel(
     X_ptr,
@@ -83,66 +90,73 @@ def rotary_embedding_kernel(
 ):
     BSH = tl.program_id(0)
     BH = BATCH * N_HEAD
-
     seq_len_idx = BSH // BH
     batch_head_idx = BSH % BH
     batch_idx = batch_head_idx // N_HEAD
     head_idx = batch_head_idx % N_HEAD
 
-    X_block_ptr = tl.make_block_ptr(
+    tile_idx = tl.program_id(1) * HALF_HEAD_DIM_TILE_SIZE
+
+    X1_block_ptr = tl.make_block_ptr(
         base=X_ptr,
         shape=(BATCH, SEQ_LEN, N_HEAD, 2, HALF_HEAD_DIM),
         strides=(stride_xbs, stride_xsl, stride_xnh, stride_x2d, stride_xhd),
-        offsets=(batch_idx, seq_len_idx, head_idx, 0, 0),
+        offsets=(batch_idx, seq_len_idx, head_idx, 0, tile_idx),
         block_shape=(1, 1, 1, 1, HALF_HEAD_DIM_TILE_SIZE),
         order=(4, 3, 2, 1, 0),
     )
+    Y1_block_ptr = X1_block_ptr.advance((0, 0, 0, 1, 0))
 
     cos_block_ptr = tl.make_block_ptr(
         base=cos_ptr,
-        shape=(1, HALF_HEAD_DIM),
+        shape=(SEQ_LEN, HALF_HEAD_DIM),
         strides=(stride_csl, stride_chd),
-        offsets=(seq_len_idx, 0),
+        offsets=(seq_len_idx, tile_idx),
         block_shape=(1, HALF_HEAD_DIM_TILE_SIZE),
         order=(1, 0),
     )
 
     sin_block_ptr = tl.make_block_ptr(
-        base=cos_ptr,
-        shape=(1, HALF_HEAD_DIM),
+        base=sin_ptr,
+        shape=(SEQ_LEN, HALF_HEAD_DIM),
         strides=(stride_ssl, stride_shd),
-        offsets=(seq_len_idx, 0),
+        offsets=(seq_len_idx, tile_idx),
         block_shape=(1, HALF_HEAD_DIM_TILE_SIZE),
         order=(1, 0),
     )
 
-    out_block_ptr = tl.make_block_ptr(
-        base=X_ptr,
+    X2_block_ptr = tl.make_block_ptr(
+        base=out_ptr,
         shape=(BATCH, SEQ_LEN, N_HEAD, 2, HALF_HEAD_DIM),
         strides=(stride_obs, stride_osl, stride_onh, stride_o2d, stride_ohd),
-        offsets=(batch_idx, seq_len_idx, head_idx, 0, 0),
-        block_shape=(1, 1, 1, 1, HALF_HEAD_DIM),
+        offsets=(batch_idx, seq_len_idx, head_idx, 0, tile_idx),
+        block_shape=(1, 1, 1, 1, HALF_HEAD_DIM_TILE_SIZE),
         order=(4, 3, 2, 1, 0),
     )
+    Y2_block_ptr = X2_block_ptr.advance((0, 0, 0, 1, 0))
 
-    for _ in range(tl.cdiv(HALF_HEAD_DIM, HALF_HEAD_DIM_TILE_SIZE)):
-        cos = tl.load(cos_block_ptr, boundary_check=(1,), padding_option="zero")
-        sin = tl.load(sin_block_ptr, boundary_check=(1,), padding_option="zero")
+    cos = tl.load(cos_block_ptr, boundary_check=(1,), padding_option="zero").to(tl.float32)
+    sin = tl.load(sin_block_ptr, boundary_check=(1,), padding_option="zero").to(tl.float32)
 
-        x1 = tl.load(X_block_ptr, boundary_check=(4,), padding_option="zero")
-        x1 = tl.load(X_block_ptr, boundary_check=(4,), padding_option="zero")
+    x1 = tl.load(X1_block_ptr, boundary_check=(4,), padding_option="zero").to(tl.float32)
+    y1 = tl.load(Y1_block_ptr, boundary_check=(4,), padding_option="zero").to(tl.float32)
+
+    x2 = cos * x1 - sin * y1
+    y2 = sin * x1 + cos * y1
+
+    tl.store(X2_block_ptr, x2.to(out_ptr.type.element_ty), boundary_check=(4,))
+    tl.store(Y2_block_ptr, y2.to(out_ptr.type.element_ty), boundary_check=(4,))
 
 
-def rotary_embedding(
+def _rotary_embedding(
     x: Float[torch.Tensor, "... seq_len n_head head_dim"],
-    cos: Float["seq_len half_head_dim"],
-    sin: Float["seq_len half_head_dim"],
+    cos: Float[torch.Tensor, "seq_len half_head_dim"],
+    sin: Float[torch.Tensor, "seq_len half_head_dim"],
 ) -> Float[torch.Tensor, "... seq_len n_head head_dim"]:
     *dims, seq_len, n_head, head_dim = x.shape
     batch = prod(dims)
 
-    x = x.flatten(start_dim=0, end_dim=1)  # collapse ... dimensions so number of dimensions is known
-    x = x.unflatten(dim=-1, sizes=(2, head_dim // 2))  # split head_dim for easier indexing in kernel
+    x = x.reshape(batch, seq_len, n_head, 2, head_dim // 2)
     out = torch.empty_like(x)
 
     stride_xbs, stride_xsl, stride_xnh, stride_x2d, stride_xhd = x.stride()
@@ -151,7 +165,10 @@ def rotary_embedding(
     stride_obs, stride_osl, stride_onh, stride_o2d, stride_ohd = out.stride()
 
     def grid(meta):
-        return triton.cdiv(meta["SEQ_LEN"], meta["SEQ_LEN_TILE_SIZE"]), meta["HEAD_DIM_TILE_SIZE"]
+        return (
+            meta["BATCH"] * meta["SEQ_LEN"] * meta["N_HEAD"],
+            triton.cdiv(meta["HALF_HEAD_DIM"], meta["HALF_HEAD_DIM_TILE_SIZE"]),
+        )
 
     rotary_embedding_kernel[grid](
         x,
@@ -176,6 +193,33 @@ def rotary_embedding(
         seq_len,
         n_head,
         head_dim // 2,
-    )  # type: ignore
+    )
 
-    return out
+    return out.reshape(*dims, seq_len, n_head, head_dim)
+
+
+class _RotaryEmbedding(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        x: Float[torch.Tensor, "... seq_len n_head head_dim"],
+        cos: Float[torch.Tensor, "seq_len half_head_dim"],
+        sin: Float[torch.Tensor, "seq_len half_head_dim"],
+    ) -> Float[torch.Tensor, "... seq_len n_head head_dim"]:
+        ctx.save_for_backward(cos, sin)
+        return _rotary_embedding(x, cos, sin)
+
+    @staticmethod
+    def backward(  # type: ignore
+        ctx, grad_output: Float[torch.Tensor, "... seq_len n_head head_dim"]
+    ) -> tuple[Float[torch.Tensor, "... seq_len n_head head_dim"], None, None]:
+        cos, sin = ctx.saved_tensors
+        return _rotary_embedding(grad_output, cos, -sin), None, None
+
+
+def rotary_embedding(
+    x: Float[torch.Tensor, "... seq_len n_head head_dim"],
+    cos: Float[torch.Tensor, "seq_len half_head_dim"],
+    sin: Float[torch.Tensor, "seq_len half_head_dim"],
+) -> Float[torch.Tensor, "... seq_len n_head head_dim"]:
+    return _RotaryEmbedding.apply(x, cos, sin)  # type: ignore
