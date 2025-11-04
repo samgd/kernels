@@ -49,6 +49,8 @@ The Triton forwards pass loads the input vector with shape `[batch_size, n_token
 
 ### Rotary Position Embedding (RoPE)
 
+Paper: [link](https://arxiv.org/abs/2104.09864)
+
 #### Triton
 
 ##### Forward
