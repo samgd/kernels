@@ -332,8 +332,6 @@ def _rms_norm_backward(
         batch_total,  # type: ignore
     )
 
-    torch.cuda.synchronize()
-
     return grad_input.reshape(*dims, hidden_size), grad_weight
 
 
