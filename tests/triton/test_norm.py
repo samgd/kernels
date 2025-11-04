@@ -63,8 +63,6 @@ def test_triton_rms_norm_backward(example):
     l_trt = act.sum()
     l_trt.backward()
 
-    torch.cuda.synchronize()
-
     for typ, act, exp in [("x", x_trt.grad, x_pyt.grad), ("w", w_trt.grad, w_pyt.grad)]:
         max_abs_diff = (act - exp).abs().max()
         if x.dtype in [torch.float16, torch.bfloat16]:
