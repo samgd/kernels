@@ -55,4 +55,16 @@ Paper: [link](https://arxiv.org/abs/2104.09864)
 
 ##### Forward
 
+![RoPE Forward Speed](https://github.com/samgd/kernels/blob/main/assets/rope_fwd.svg?raw=true)
+
+The Triton forward pass kernel launches one program (CUDA block/CTA) per `[batch, seq_len, n_head]` and each program applies RoPE over the `head_dim`. The `[batch, seq_len, n_head, head_dim]` input is loaded and stored from global memory in the native data type (e.g. bfloat16). The cosine and sine arrays used in the rotation have shape `[seq_len, head_dim // 2]` and data type `float32`. Each program loads the `[1, head_dim // 2]` slice at the corresponding `seq_len`. The total cosine and sine loads is therefore `2*[batch, seq_len, n_head, head_dim // 2]` however in practice these arrays fit within cache so global memory loads are limited. 
+
+The `lower` bound on the plot assumes perfect caching so no cosine nor sine global memory loads. The `upper` bound assumes no caching so each program loads the cosine and sine data it needs from global memory.
+
+![RoPE Forward Bandwidth](https://github.com/samgd/kernels/blob/main/assets/rope_fwd_bw.svg?raw=true)
+
 ##### Backward
+
+The forward pass of RoPE splits the head_dim into pairs of values and rotates each pair before concatenating them back together. The backwards pass "un-rotates" pairs in the gradient with respect to the output to get the gradient with respect to the input. This "un-rotation" is a fowards pass with the gradient with respect to the output as input and the cached sine rotation array multiplied by -1. 
+
+![RoPE Backward Speed](https://github.com/samgd/kernels/blob/main/assets/rope_bwd.svg?raw=true)
