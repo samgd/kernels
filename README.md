@@ -65,6 +65,6 @@ The `lower` bound on the plot assumes perfect caching so no cosine nor sine glob
 
 ##### Backward
 
-The forward pass of RoPE splits the head_dim into pairs of values and rotates each pair before concatenating them back together. The backwards pass "un-rotates" pairs in the gradient with respect to the output to get the gradient with respect to the input. This "un-rotation" is a fowards pass with the gradient with respect to the output as input and the cached sine rotation array multiplied by -1. 
+The forward pass of RoPE splits the `head_dim` into pairs of values and rotates each pair before concatenating them back together. The backwards pass "un-rotates" pairs in the gradient with respect to the output to get the gradient with respect to the input. This "un-rotation" is a fowards pass with the gradient with respect to the output as input and the cached sine rotation array multiplied by -1. 
 
 ![RoPE Backward Speed](https://github.com/samgd/kernels/blob/main/assets/rope_bwd.svg?raw=true)
