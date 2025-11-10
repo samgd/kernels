@@ -2,12 +2,19 @@
 
 A library of kernels written in various Python-based languages.
 
+- [MatMul](https://github.com/samgd/kernels#matmul)
 - [Attention](https://github.com/samgd/kernels#attention)
   - [FlashAttention-2](https://github.com/samgd/kernels#flashattention-2)
 - [Normalization](https://github.com/samgd/kernels#normalization)
   - [RMSNorm](https://github.com/samgd/kernels#rmsnorm)
 - [Position Embedding](https://github.com/samgd/kernels#position-embedding)
   - [Rotary Position Embedding (RoPE)](https://github.com/samgd/kernels#rotary-position-embedding-rope)
+
+## MatMul
+
+#### Triton
+
+![MatMul Speed](https://github.com/samgd/kernels/blob/main/assets/matmul.svg?raw=true)
 
 ## Attention
 
