@@ -32,15 +32,18 @@ def matmul_kernel(
     A_ptr,
     B_ptr,
     C_ptr,
+    bias_ptr,
     stride_am,
     stride_ak,
     stride_bk,
     stride_bn,
     stride_cm,
     stride_cn,
+    stride_on,
     M,
     K,
     N,
+    ADD_BIAS: tl.constexpr,
     M_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
     N_TILE_SIZE: tl.constexpr,
@@ -55,52 +58,61 @@ def matmul_kernel(
     # [ 1,  3,  5,  7,  9, 11, 13, 15]
     # [16, 18, 20, 22, 24, 26, 28, 30]
     # [17, 19, 21, 23, 25, 27, 29, 31]
+    # [32, 33, 34, 35, 36, 37, 38, 39]
     #
-    # Compute program_id -> [m_index, n_index] mapping. Example with GROUP_SIZE_M=2, M=4, N=8:
+    # Compute program_id -> [m_index, n_index] mapping. Example with GROUP_SIZE_M=2, M=5, N=8:
     #
     # group_id:
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 1,  1,  1,  1,  1,  1,  1,  1]
     # [ 1,  1,  1,  1,  1,  1,  1,  1]
+    # [ 2,  2,  2,  2,  2,  2,  2,  2]
     #
     # pid_in_group:
     # [ 0,  2,  4,  6,  8, 10, 12, 14]
     # [ 1,  3,  5,  7,  9, 11, 13, 15]
     # [ 0,  2,  4,  6,  8, 10, 12, 14]
     # [ 1,  3,  5,  7,  9, 11, 13, 15]
+    # [ 0,  1,  2,  3,  4,  5,  6,  7]  <-- note
     #
     # first_m:
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 2,  2,  2,  2,  2,  2,  2,  2]
     # [ 2,  2,  2,  2,  2,  2,  2,  2]
+    # [ 4,  4,  4,  4,  4,  4,  4,  4]
     #
     # pid_in_group % GROUP_SIZE_M
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 1,  1,  1,  1,  1,  1,  1,  1]
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 1,  1,  1,  1,  1,  1,  1,  1]
+    # [ 0,  0,  0,  0,  0,  0,  0,  0]
     #
-    # m_index = first_m + (pid_in_group % GROUP_SIZE_M)
+    # m_index = first_m + (pid_in_group % group_size_m)
     # [ 0,  0,  0,  0,  0,  0,  0,  0]
     # [ 1,  1,  1,  1,  1,  1,  1,  1]
     # [ 2,  2,  2,  2,  2,  2,  2,  2]
     # [ 3,  3,  3,  3,  3,  3,  3,  3]
+    # [ 4,  4,  4,  4,  4,  4,  4,  4]
     #
-    # n_index = pid_in_group // GROUP_SIZE_M
+    # n_index = pid_in_group // group_size_m
+    # [ 0,  1,  2,  3,  4,  5,  6,  7]
     # [ 0,  1,  2,  3,  4,  5,  6,  7]
     # [ 0,  1,  2,  3,  4,  5,  6,  7]
     # [ 0,  1,  2,  3,  4,  5,  6,  7]
     # [ 0,  1,  2,  3,  4,  5,  6,  7]
     n_pid_n = tl.cdiv(N, N_TILE_SIZE)
+    n_pid_m = tl.cdiv(M, M_TILE_SIZE)
     S = GROUP_SIZE_M * n_pid_n
 
     group_id = pid // S
     pid_in_group = pid % S
     first_m = group_id * GROUP_SIZE_M
-    m_index = first_m + (pid_in_group % GROUP_SIZE_M)
-    n_index = pid_in_group // GROUP_SIZE_M
+    group_size_m = tl.minimum(tl.full((), GROUP_SIZE_M, tl.int32), n_pid_m - first_m)
+    m_index = first_m + (pid_in_group % group_size_m)
+    n_index = pid_in_group // group_size_m
 
     A_block_ptr = tl.make_block_ptr(
         A_ptr,
@@ -119,6 +131,16 @@ def matmul_kernel(
         block_shape=(K_TILE_SIZE, N_TILE_SIZE),
         order=(1, 0),
     )
+
+    if ADD_BIAS:
+        bias_block_ptr = tl.make_block_ptr(
+            bias_ptr,
+            shape=(N,),
+            strides=(stride_on,),
+            offsets=(n_index * N_TILE_SIZE,),
+            block_shape=(N_TILE_SIZE,),
+            order=(0,),
+        )
 
     C_block_ptr = tl.make_block_ptr(
         C_ptr,
@@ -140,12 +162,15 @@ def matmul_kernel(
         A_block_ptr = A_block_ptr.advance((0, K_TILE_SIZE))
         B_block_ptr = B_block_ptr.advance((K_TILE_SIZE, 0))
 
+    if ADD_BIAS:
+        bias = tl.load(bias_block_ptr, boundary_check=(0,), padding_option="zero").to(tl.float32)
+        acc += bias
+
     tl.store(C_block_ptr, acc.to(C_ptr.type.element_ty), boundary_check=(0, 1))
 
 
 def matmul(
-    A: Float[torch.Tensor, "... K"],
-    B: Float[torch.Tensor, "K N"],
+    A: Float[torch.Tensor, "... K"], B: Float[torch.Tensor, "K N"], bias: Float[torch.Tensor, " N"] | None = None
 ) -> Float[torch.Tensor, "... N"]:
     *dims, K = A.shape
     B_K, N = B.shape
@@ -153,6 +178,13 @@ def matmul(
     assert K == B_K, f"A {K=} and B {B_K=} must match"
     assert A.dtype == B.dtype, f"{A.dtype=} and {B.dtype=} must be the same"
     assert A.device == B.device, f"{A.device=} and {B.device=} must be the same"
+
+    if bias is not None:
+        (bias_N,) = bias.shape
+        assert bias_N == N, f"{bias.shape} must be {N=}"
+        (stride_on,) = bias.stride()
+    else:
+        stride_on = 1
 
     M = prod(dims)
     A = A.reshape(M, K)
@@ -170,17 +202,20 @@ def matmul(
         A,
         B,
         C,
+        bias,
         stride_am,
         stride_ak,
         stride_bk,
         stride_bn,
         stride_cm,
         stride_cn,
+        stride_on,
         M,
-        N,
         K,
+        N,
+        bias is not None,
     )
 
-    C = C.reshape(*dims, K)
+    C = C.reshape(*dims, N)
 
     return C
