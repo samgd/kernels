@@ -3,6 +3,7 @@ from math import prod
 import torch
 from jaxtyping import Float
 
+from kernels.init import glorot_uniform_, zero_
 from kernels.triton.matmul import matmul
 
 
@@ -63,20 +64,23 @@ class Linear(torch.nn.Module):
         in_features,
         out_features,
         bias: bool = True,
-        device: torch.device | None = None,
+        device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ):
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self._bias = bias
 
-        self.weight = torch.empty((out_features, in_features), device=device, dtype=dtype)
-        self.bias = torch.empty(out_features, device=device, dtype=dtype) if self._bias else None
+        self.weight = torch.nn.Parameter(torch.empty((out_features, in_features), device=device, dtype=dtype))
+        self.bias = torch.nn.Parameter(torch.empty(out_features, device=device, dtype=dtype)) if self._bias else None
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        pass
+        glorot_uniform_(self.weight)
+        if self.bias is not None:
+            zero_(self.bias)
 
     def forward(self, x: Float[torch.Tensor, "... in_features"]) -> Float[torch.Tensor, "... out_features"]:
         return linear(x, self.weight, self.bias)
