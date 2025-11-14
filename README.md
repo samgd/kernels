@@ -9,6 +9,8 @@ A library of kernels written in various Python-based languages.
   - [RMSNorm](https://github.com/samgd/kernels#rmsnorm)
 - [Position Embedding](https://github.com/samgd/kernels#position-embedding)
   - [Rotary Position Embedding (RoPE)](https://github.com/samgd/kernels#rotary-position-embedding-rope)
+- [Losses](https://github.com/samgd/kernels#losses)
+  - [Cross Entropy](https://github.com/samgd/kernels#cross-entropy)
 
 ## MatMul
 
