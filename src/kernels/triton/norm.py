@@ -358,3 +358,20 @@ def rms_norm(
     x: Float[torch.Tensor, "... hidden_size"], weight: Float[torch.Tensor, " hidden_size"], eps: float = 1e-5
 ) -> Float[torch.Tensor, "... hidden_size"]:
     return _RMSNorm.apply(x, weight, eps)  # type: ignore
+
+
+class RMSNorm(torch.nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        eps: float = 1e-5,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.weight = torch.nn.Parameter(torch.ones(hidden_size, device=device, dtype=dtype))
+        self.eps = eps
+
+    def forward(self, x: Float[torch.Tensor, "... hidden_size"]) -> Float[torch.Tensor, "... hidden_size"]:
+        return rms_norm(x, self.weight, self.eps)
