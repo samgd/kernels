@@ -3,8 +3,8 @@ import hypothesis.strategies as st
 from jaxtyping import Float
 from hypothesis import given, note
 
-from kernels.pytorch.activation import sigmoid as pytorch_sigmoid
-from kernels.triton.activation import sigmoid as triton_sigmoid
+from kernels.pytorch.activation import sigmoid as pytorch_sigmoid, swish as pytorch_swish
+from kernels.triton.activation import sigmoid as triton_sigmoid, swish as triton_swish
 
 
 @st.composite
@@ -55,6 +55,44 @@ def test_triton_sigmoid_backward(x):
 
     x_trt = x.clone().requires_grad_()
     out_trt = triton_sigmoid(x_trt)
+    l_trt = out_trt.sum()
+    l_trt.backward()
+    exp = x_trt.grad
+
+    max_abs_diff = (act - exp).abs().max()
+    if x.dtype in [torch.float16, torch.bfloat16]:
+        atol = 2e-2
+        rtol = 3e-2
+    else:
+        atol = 1e-5
+        rtol = 1e-4
+    assert torch.allclose(act, exp, atol=atol, rtol=rtol), f"{max_abs_diff=}"
+
+
+@given(tensor_examples())
+def test_triton_swish_forward(x):
+    exp = pytorch_swish(x)
+    act = triton_swish(x)
+    max_abs_diff = (exp - act).abs().max()
+    if x.dtype in [torch.float16, torch.bfloat16]:
+        atol = 2e-2
+        rtol = 3e-2
+    else:
+        atol = 1e-5
+        rtol = 1e-4
+    assert torch.allclose(act, exp, atol=atol, rtol=rtol), f"{max_abs_diff=}"
+
+
+@given(tensor_examples())
+def test_triton_swish_backward(x):
+    x_pyt = x.clone().requires_grad_()
+    out_pyt = pytorch_swish(x_pyt)
+    l_pyt = out_pyt.sum()
+    l_pyt.backward()
+    act = x_pyt.grad
+
+    x_trt = x.clone().requires_grad_()
+    out_trt = triton_swish(x_trt)
     l_trt = out_trt.sum()
     l_trt.backward()
     exp = x_trt.grad

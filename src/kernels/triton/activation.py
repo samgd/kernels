@@ -18,7 +18,7 @@ def sigmoid_forward_kernel(x_ptr, out_ptr, N: tl.constexpr, BLOCK_SIZE: tl.const
 
 
 def sigmoid_forward(x: Float[torch.Tensor, " ..."]) -> Float[torch.Tensor, " ..."]:
-    x = x.contiguous()
+    x = x.contiguous()  # Support arbitrary dimension by using contiguous.
     N = x.numel()
 
     out = torch.empty_like(x)
@@ -76,3 +76,75 @@ class _Sigmoid(torch.autograd.Function):
 
 def sigmoid(x: Float[torch.Tensor, " ..."]) -> Float[torch.Tensor, " ..."]:
     return cast(Float[torch.Tensor, " ..."], _Sigmoid.apply(x))
+
+
+@triton.jit
+def swish_forward_kernel(x_ptr, out_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
+    mask = offset < N
+
+    x = tl.load(x_ptr + offset, mask=mask).to(tl.float32)
+    h = (x / (1.0 + tl.exp(-x))).to(out_ptr.type.element_ty)
+    tl.store(out_ptr + offset, h, mask=mask)
+
+
+def swish_forward(x: Float[torch.Tensor, " ..."]) -> Float[torch.Tensor, " ..."]:
+    x = x.contiguous()  # Support arbitrary dimension by using contiguous.
+    N = x.numel()
+
+    out = torch.empty_like(x)
+
+    def grid(meta):
+        return (triton.cdiv(meta["N"], meta["BLOCK_SIZE"]),)
+
+    swish_forward_kernel[grid](x, out, N, 1024)  # type: ignore
+
+    return out
+
+
+@triton.jit
+def swish_backward_kernel(x_ptr, grad_output_ptr, grad_input_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
+    mask = offset < N
+
+    # Recompute sigmoid(x) to avoid precision loss if forward output isn't fp32.
+    x = tl.load(x_ptr + offset, mask=mask).to(tl.float32)
+    g = tl.load(grad_output_ptr + offset, mask=mask).to(tl.float32)
+    sigmoid = 1.0 / (1.0 + tl.exp(-x))
+    grad = g * sigmoid * (1 + x - x * sigmoid)
+    tl.store(grad_input_ptr + offset, grad, mask=mask)
+
+
+def swish_backward(
+    x: Float[torch.Tensor, " ..."], grad_output: Float[torch.Tensor, " ..."]
+) -> Float[torch.Tensor, " ..."]:
+    x = x.contiguous()
+    grad_output = grad_output.contiguous()
+    N = x.numel()
+
+    grad_input = torch.empty_like(x)
+
+    def grid(meta):
+        return (triton.cdiv(meta["N"], meta["BLOCK_SIZE"]),)
+
+    swish_backward_kernel[grid](x, grad_output, grad_input, N, 1024)  # type: ignore
+
+    return grad_input
+
+
+class _Swish(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, "..."]:
+        ctx.save_for_backward(x)
+        return swish_forward(x)
+
+    @staticmethod
+    def backward(ctx, grad_output: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, "..."]:  # type: ignore
+        (x,) = ctx.saved_tensors
+        return swish_backward(x, grad_output)
+
+
+def swish(x: Float[torch.Tensor, " ..."]) -> Float[torch.Tensor, " ..."]:
+    return cast(Float[torch.Tensor, " ..."], _Swish.apply(x))
