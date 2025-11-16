@@ -14,7 +14,6 @@ class RotaryEmbedding(torch.nn.Module):
         head_dim: int,
         base: float = 10_000.0,
         device: torch.device | None = None,
-        dtype: torch.dtype = torch.float32,
         max_seq_len: int | None = None,
     ):
         super().__init__()
