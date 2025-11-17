@@ -1,14 +1,33 @@
+from enum import auto, StrEnum
 from typing import cast
 
 import einx
 import torch
 from jaxtyping import Float, Integer
 
-from kernels.triton.activation import swish
-from kernels.triton.attention import scaled_dot_product_attention
+from kernels.pytorch.activation import swish as pyt_swish
+from kernels.pytorch.attention import scaled_dot_product_attention as pyt_attention
+from kernels.pytorch.norm import RMSNorm as pyt_norm
+from kernels.pytorch.rotary import RotaryEmbedding as pyt_RotaryEmbedding
+from kernels.triton.activation import swish as trt_swish
+from kernels.triton.attention import scaled_dot_product_attention as trt_attention
 from kernels.triton.linear import Linear
-from kernels.triton.norm import RMSNorm
-from kernels.triton.rotary import RotaryEmbedding
+from kernels.triton.norm import RMSNorm as trt_norm
+from kernels.triton.rotary import RotaryEmbedding as trt_RotaryEmbedding
+
+
+class Impl(StrEnum):
+    PYTORCH = auto()
+    TRITON = auto()
+
+
+OPS = {
+    "swish": {Impl.PYTORCH: pyt_swish, Impl.TRITON: trt_swish},
+    "scaled_dot_product_attention": {Impl.PYTORCH: pyt_attention, Impl.TRITON: trt_attention},
+    "Linear": {Impl.PYTORCH: torch.nn.Linear, Impl.TRITON: Linear},
+    "RMSNorm": {Impl.PYTORCH: pyt_norm, Impl.TRITON: trt_norm},
+    "RotaryEmbedding": {Impl.PYTORCH: pyt_RotaryEmbedding, Impl.TRITON: trt_RotaryEmbedding},
+}
 
 
 class Embedding(torch.nn.Module):
@@ -27,6 +46,7 @@ class Embedding(torch.nn.Module):
 class CausalMHA(torch.nn.Module):
     def __init__(
         self,
+        impl: Impl,
         d_model: int,
         n_head: int,
         device: torch.device | None = None,
@@ -37,9 +57,10 @@ class CausalMHA(torch.nn.Module):
         self.n_head = n_head
         assert self.d_model % self.n_head == 0, f"{d_model=} must be divisible by {n_head=}"
         self.head_dim = self.d_model // self.n_head
-        self.rope = RotaryEmbedding(self.head_dim, device=device)
-        self.Wqkv = Linear(d_model, 3 * d_model, bias=False, device=device, dtype=dtype)
-        self.Wout = Linear(d_model, d_model, bias=False, device=device, dtype=dtype)
+        self.rope = OPS["RotaryEmbedding"][impl](self.head_dim, device=device)
+        self.Wqkv = OPS["Linear"][impl](d_model, 3 * d_model, bias=False, device=device, dtype=dtype)
+        self.Wout = OPS["Linear"][impl](d_model, d_model, bias=False, device=device, dtype=dtype)
+        self.sdpa = OPS["scaled_dot_product_attention"][impl]
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         B, L, H = x.shape
@@ -47,38 +68,47 @@ class CausalMHA(torch.nn.Module):
         q = cast(torch.Tensor, einx.rearrange("B L nh hd -> (B nh) L hd", self.rope(q)))
         k = cast(torch.Tensor, einx.rearrange("B L nh hd -> (B nh) L hd", self.rope(k)))
         v = cast(torch.Tensor, einx.rearrange("B L nh hd -> (B nh) L hd", v))
-        h = scaled_dot_product_attention(q, k, v, is_causal=True)
+        h = self.sdpa(q, k, v, is_causal=True)
         h = einx.rearrange("(B nh) L hd -> B L (nh hd)", h, B=B, L=L, nh=self.n_head, hd=self.head_dim)
         h = self.Wout(h)
         return h
 
 
 class SwiGLU(torch.nn.Module):
-    def __init__(self, d_model: int, d_ff: int, device: torch.device | None = None, dtype: torch.dtype | None = None):
+    def __init__(
+        self, impl: Impl, d_model: int, d_ff: int, device: torch.device | None = None, dtype: torch.dtype | None = None
+    ):
         super().__init__()
         self.d_model = d_model
         self.d_ff = d_ff
-        self.fc1 = Linear(d_model, 2 * d_ff, bias=False, device=device, dtype=dtype)
-        self.fc2 = Linear(d_ff, d_model, bias=False, device=device, dtype=dtype)
+        self.fc1 = OPS["Linear"][impl](d_model, 2 * d_ff, bias=False, device=device, dtype=dtype)
+        self.fc2 = OPS["Linear"][impl](d_ff, d_model, bias=False, device=device, dtype=dtype)
+        self.swish = OPS["swish"][impl]
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         a, gate = self.fc1(x).split(self.d_ff, dim=2)
-        h = a * swish(gate)
+        h = a * self.swish(gate)
         return self.fc2(h)
 
 
 class TransformerBlock(torch.nn.Module):
     def __init__(
-        self, d_model: int, n_head: int, d_ff: int, device: torch.device | None = None, dtype: torch.dtype | None = None
+        self,
+        impl: Impl,
+        d_model: int,
+        n_head: int,
+        d_ff: int,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         super().__init__()
         self.d_model = d_model
         self.n_head = n_head
         self.d_ff = d_ff
-        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.mha = CausalMHA(d_model, n_head, device=device, dtype=dtype)
-        self.ff = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        self.norm1 = OPS["RMSNorm"][impl](d_model, device=device, dtype=dtype)
+        self.norm2 = OPS["RMSNorm"][impl](d_model, device=device, dtype=dtype)
+        self.mha = CausalMHA(impl, d_model, n_head, device=device, dtype=dtype)
+        self.ff = SwiGLU(impl, d_model, d_ff, device=device, dtype=dtype)
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         h = x + self.mha(self.norm1(x))
@@ -89,6 +119,7 @@ class TransformerBlock(torch.nn.Module):
 class Transformer(torch.nn.Module):
     def __init__(
         self,
+        impl: Impl,
         n_vocab: int,
         depth: int,
         d_model: int,
@@ -100,10 +131,10 @@ class Transformer(torch.nn.Module):
         super().__init__()
         self.embed = Embedding(n_vocab, d_model, device=device, dtype=dtype)
         self.layers = torch.nn.Sequential(
-            *[TransformerBlock(d_model, n_head, d_ff, device=device, dtype=dtype) for _ in range(depth)]
+            *[TransformerBlock(impl, d_model, n_head, d_ff, device=device, dtype=dtype) for _ in range(depth)]
         )
-        self.norm = RMSNorm(d_model, device=device, dtype=dtype)
-        self.proj = Linear(d_model, n_vocab, bias=False, device=device, dtype=dtype)
+        self.norm = OPS["RMSNorm"][impl](d_model, device=device, dtype=dtype)
+        self.proj = OPS["Linear"][impl](d_model, n_vocab, bias=False, device=device, dtype=dtype)
 
     def forward(self, idxs: Integer[torch.Tensor, "batch seq_len"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         return self.proj(self.norm(self.layers(self.embed(idxs))))
