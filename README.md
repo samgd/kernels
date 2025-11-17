@@ -11,6 +11,8 @@ A library of kernels written in various Python-based languages.
   - [Rotary Position Embedding (RoPE)](https://github.com/samgd/kernels#rotary-position-embedding-rope)
 - [Losses](https://github.com/samgd/kernels#losses)
   - [Cross Entropy](https://github.com/samgd/kernels#cross-entropy)
+- [Activation Functions](https://github.com/samgd/kernels#activation-functions)
+  - [Sigmoid](https://github.com/samgd/kernels#sigmoid)
 
 ## MatMul
 
@@ -91,3 +93,17 @@ The forward pass of RoPE splits the `head_dim` into pairs of values and rotates 
 ##### Backward
 
 ![RMSNorm Backward Speed](https://github.com/samgd/kernels/blob/main/assets/cross_entropy_bwd.svg?raw=true)
+
+## Activation Functions
+
+### Sigmoid
+
+#### Triton
+
+##### Forward
+
+![Sigmoid Forward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_fwd.svg?raw=true)
+
+##### Backward
+
+![Sigmoid Backward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_bwd.svg?raw=true)
