@@ -16,3 +16,6 @@
 
 # Benchmarking
 benchmarks
+
+# Notebooks
+.ipynb_checkpoints
