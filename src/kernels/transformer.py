@@ -22,11 +22,20 @@ class Impl(StrEnum):
 
 
 OPS = {
-    "swish": {Impl.PYTORCH: pyt_swish, Impl.TRITON: trt_swish},
-    "scaled_dot_product_attention": {Impl.PYTORCH: pyt_attention, Impl.TRITON: trt_attention},
-    "Linear": {Impl.PYTORCH: torch.nn.Linear, Impl.TRITON: Linear},
-    "RMSNorm": {Impl.PYTORCH: pyt_norm, Impl.TRITON: trt_norm},
-    "RotaryEmbedding": {Impl.PYTORCH: pyt_RotaryEmbedding, Impl.TRITON: trt_RotaryEmbedding},
+    Impl.PYTORCH: {
+        "swish": pyt_swish,
+        "scaled_dot_product_attention": pyt_attention,
+        "Linear": torch.nn.Linear,
+        "RMSNorm": pyt_norm,
+        "RotaryEmbedding": pyt_RotaryEmbedding,
+    },
+    Impl.TRITON: {
+        "swish": trt_swish,
+        "scaled_dot_product_attention": trt_attention,
+        "Linear": Linear,
+        "RMSNorm": trt_norm,
+        "RotaryEmbedding": trt_RotaryEmbedding,
+    },
 }
 
 
@@ -57,10 +66,10 @@ class CausalMHA(torch.nn.Module):
         self.n_head = n_head
         assert self.d_model % self.n_head == 0, f"{d_model=} must be divisible by {n_head=}"
         self.head_dim = self.d_model // self.n_head
-        self.rope = OPS["RotaryEmbedding"][impl](self.head_dim, device=device)
-        self.Wqkv = OPS["Linear"][impl](d_model, 3 * d_model, bias=False, device=device, dtype=dtype)
-        self.Wout = OPS["Linear"][impl](d_model, d_model, bias=False, device=device, dtype=dtype)
-        self.sdpa = OPS["scaled_dot_product_attention"][impl]
+        self.rope = OPS[impl]["RotaryEmbedding"](self.head_dim, device=device)
+        self.Wqkv = OPS[impl]["Linear"](d_model, 3 * d_model, bias=False, device=device, dtype=dtype)
+        self.Wout = OPS[impl]["Linear"](d_model, d_model, bias=False, device=device, dtype=dtype)
+        self.sdpa = OPS[impl]["scaled_dot_product_attention"]
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         B, L, H = x.shape
@@ -81,9 +90,9 @@ class SwiGLU(torch.nn.Module):
         super().__init__()
         self.d_model = d_model
         self.d_ff = d_ff
-        self.fc1 = OPS["Linear"][impl](d_model, 2 * d_ff, bias=False, device=device, dtype=dtype)
-        self.fc2 = OPS["Linear"][impl](d_ff, d_model, bias=False, device=device, dtype=dtype)
-        self.swish = OPS["swish"][impl]
+        self.fc1 = OPS[impl]["Linear"](d_model, 2 * d_ff, bias=False, device=device, dtype=dtype)
+        self.fc2 = OPS[impl]["Linear"](d_ff, d_model, bias=False, device=device, dtype=dtype)
+        self.swish = OPS[impl]["swish"]
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         a, gate = self.fc1(x).split(self.d_ff, dim=2)
@@ -105,8 +114,8 @@ class TransformerBlock(torch.nn.Module):
         self.d_model = d_model
         self.n_head = n_head
         self.d_ff = d_ff
-        self.norm1 = OPS["RMSNorm"][impl](d_model, device=device, dtype=dtype)
-        self.norm2 = OPS["RMSNorm"][impl](d_model, device=device, dtype=dtype)
+        self.norm1 = OPS[impl]["RMSNorm"](d_model, device=device, dtype=dtype)
+        self.norm2 = OPS[impl]["RMSNorm"](d_model, device=device, dtype=dtype)
         self.mha = CausalMHA(impl, d_model, n_head, device=device, dtype=dtype)
         self.ff = SwiGLU(impl, d_model, d_ff, device=device, dtype=dtype)
 
@@ -133,8 +142,8 @@ class Transformer(torch.nn.Module):
         self.layers = torch.nn.Sequential(
             *[TransformerBlock(impl, d_model, n_head, d_ff, device=device, dtype=dtype) for _ in range(depth)]
         )
-        self.norm = OPS["RMSNorm"][impl](d_model, device=device, dtype=dtype)
-        self.proj = OPS["Linear"][impl](d_model, n_vocab, bias=False, device=device, dtype=dtype)
+        self.norm = OPS[impl]["RMSNorm"](d_model, device=device, dtype=dtype)
+        self.proj = OPS[impl]["Linear"](d_model, n_vocab, bias=False, device=device, dtype=dtype)
 
     def forward(self, idxs: Integer[torch.Tensor, "batch seq_len"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
         return self.proj(self.norm(self.layers(self.embed(idxs))))
