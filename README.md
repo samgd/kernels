@@ -100,4 +100,10 @@ The forward pass of RoPE splits the `head_dim` into pairs of values and rotates 
 
 #### Triton
 
-![Sigmoid Forward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_fwd.svg?raw=true) ![Sigmoid Backward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_bwd.svg?raw=true)
+##### Forward
+
+![Sigmoid Forward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_fwd.svg?raw=true)
+
+##### Backward
+
+![Sigmoid Backward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_bwd.svg?raw=true)
