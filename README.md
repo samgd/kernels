@@ -13,6 +13,7 @@ A library of kernels written in various Python-based languages.
   - [Cross Entropy](https://github.com/samgd/kernels#cross-entropy)
 - [Activation Functions](https://github.com/samgd/kernels#activation-functions)
   - [Sigmoid](https://github.com/samgd/kernels#sigmoid)
+  - [Swish](https://github.com/samgd/kernels#swish)
 
 ## MatMul
 
@@ -107,3 +108,15 @@ The forward pass of RoPE splits the `head_dim` into pairs of values and rotates 
 ##### Backward
 
 ![Sigmoid Backward Speed](https://github.com/samgd/kernels/blob/main/assets/sigmoid_bwd.svg?raw=true)
+
+### Swish
+
+#### Triton
+
+##### Forward
+
+![Swish Forward Speed](https://github.com/samgd/kernels/blob/main/assets/swish_fwd.svg?raw=true)
+
+##### Backward
+
+![Swish Backward Speed](https://github.com/samgd/kernels/blob/main/assets/swish_bwd.svg?raw=true)
