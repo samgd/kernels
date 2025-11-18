@@ -19,3 +19,8 @@ benchmarks
 
 # Notebooks
 .ipynb_checkpoints
+
+# Datasets
+data/**/*.gz
+data/**/*.txt
+data/**/*.bin
