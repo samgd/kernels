@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import tiktoken
+import torch
+from jaxtyping import Integer
 from tqdm import tqdm
 
 
@@ -31,3 +33,30 @@ def open_mmap(bin_path: Path, dtype: np.dtype = np.dtype(np.uint16)) -> np.memma
     assert total % dtype.itemsize == 0, "File size not a multiple of dtype size"
     length = total // dtype.itemsize
     return np.memmap(bin_path, dtype=dtype, mode="r", shape=(length,))
+
+
+class Dataset(torch.utils.data.Dataset):
+    def __init__(self, seq_len: int, path: Path):
+        super().__init__()
+        self.seq_len = seq_len
+        self.path = path
+        # Lazy load to avoid worker processes loading array into memory when pickling Dataset.
+        self._data = None
+
+    @property
+    def data(self):
+        if self._data is None:
+            self._data = open_mmap(self.path)
+        return self._data
+
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[Integer[torch.Tensor, "batch seq_len"], Integer[torch.Tensor, "batch seq_len"]]:
+        x = torch.tensor(self.data[idx : idx + self.seq_len]).int()
+        y = torch.tensor(self.data[idx + 1 : idx + self.seq_len + 1]).int()
+        return x, y
+
+    def __len__(self) -> int:
+        # Targets require `idx + 1:idx + seq_len + 1` to exist so effectively:
+        # `len(self.data) - (self.seq_len + 1) + 1`
+        return max(len(self.data) - self.seq_len, 0)
