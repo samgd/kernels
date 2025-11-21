@@ -13,9 +13,11 @@ def train(
     valid_dl: torch.utils.data.DataLoader,
     loss_fn: Callable[[Float[torch.Tensor, "..."], Integer[torch.Tensor, "..."]], Float[torch.Tensor, " batch"]],
     epochs: int,
+    max_norm: float | None = None,
 ) -> dict[str, list]:
     losses = []
     lrs = []
+    norms = []
 
     valid_epoch_losses = []
 
@@ -35,6 +37,11 @@ def train(
                 loss = loss_fn(out.flatten(end_dim=1), y.flatten()).mean()
 
                 loss.backward()
+
+                if max_norm is not None:
+                    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
+                    norms.append(norm.item())
+
                 opt.step()
                 lr_sched.step()
 
@@ -65,4 +72,7 @@ def train(
             valid_epoch_losses.append(sum(valid_losses) / len(valid_losses))
             pbar.set_postfix_str(f"valid_loss={valid_epoch_losses[-1]:5.3f}")
 
-    return {"lrs": lrs, "losses": losses, "valid_epoch_losses": valid_epoch_losses}
+    out = {"lrs": lrs, "losses": losses, "valid_epoch_losses": valid_epoch_losses}
+    if max_norm is not None:
+        out["norms"] = norms
+    return out
