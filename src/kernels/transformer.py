@@ -40,6 +40,15 @@ OPS = {
 
 
 class Embedding(torch.nn.Module):
+    """Token embedding layer.
+
+    Args:
+        num_embeddings: Vocabulary size.
+        d_model: Embedding dimension.
+        device: Optional device to initialise on.
+        dtype: Optional dtype to use.
+    """
+
     def __init__(
         self, num_embeddings: int, d_model: int, device: torch.device | None = None, dtype: torch.dtype | None = None
     ):
@@ -49,10 +58,21 @@ class Embedding(torch.nn.Module):
         self.weight = torch.nn.Parameter(torch.randn(num_embeddings, d_model, dtype=dtype, device=device))
 
     def forward(self, idxs: Integer[torch.Tensor, "batch seq_len"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
+        """Look up embeddings for token indices."""
         return self.weight[idxs]
 
 
 class CausalMHA(torch.nn.Module):
+    """Multi-head attention block with rotary embeddings and causal masking.
+
+    Args:
+        impl: Implementation backend (PyTorch or Triton).
+        d_model: Model hidden dimension.
+        n_head: Number of attention heads.
+        device: Optional device to initialise on.
+        dtype: Optional dtype to use.
+    """
+
     def __init__(
         self,
         impl: Impl,
@@ -72,6 +92,7 @@ class CausalMHA(torch.nn.Module):
         self.sdpa = OPS[impl]["scaled_dot_product_attention"]
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
+        """Apply causal multi-head self-attention to the input sequence."""
         B, L, H = x.shape
         q, k, v = self.Wqkv(x).view(B, L, 3, self.n_head, self.head_dim).unbind(dim=2)
         q = cast(torch.Tensor, einx.rearrange("B L nh hd -> (B nh) L hd", self.rope(q)))
@@ -84,6 +105,16 @@ class CausalMHA(torch.nn.Module):
 
 
 class SwiGLU(torch.nn.Module):
+    """SwiGLU feed-forward block.
+
+    Args:
+        impl: Implementation backend (PyTorch or Triton).
+        d_model: Model hidden dimension.
+        d_ff: Feed-forward hidden dimension.
+        device: Optional device to initialise on.
+        dtype: Optional dtype to use.
+    """
+
     def __init__(
         self, impl: Impl, d_model: int, d_ff: int, device: torch.device | None = None, dtype: torch.dtype | None = None
     ):
@@ -95,12 +126,24 @@ class SwiGLU(torch.nn.Module):
         self.swish = OPS[impl]["swish"]
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
+        """Project up, apply SwiGLU gate, and project back down."""
         a, gate = self.fc1(x).split(self.d_ff, dim=2)
         h = a * self.swish(gate)
         return self.fc2(h)
 
 
 class TransformerBlock(torch.nn.Module):
+    """Pre-norm transformer block with causal attention and SwiGLU.
+
+    Args:
+        impl: Implementation backend (PyTorch or Triton).
+        d_model: Model hidden dimension.
+        n_head: Number of attention heads.
+        d_ff: Feed-forward hidden dimension.
+        device: Optional device to initialise on.
+        dtype: Optional dtype to use.
+    """
+
     def __init__(
         self,
         impl: Impl,
@@ -120,12 +163,26 @@ class TransformerBlock(torch.nn.Module):
         self.ff = SwiGLU(impl, d_model, d_ff, device=device, dtype=dtype)
 
     def forward(self, x: Float[torch.Tensor, "batch seq_len d_model"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
+        """Apply feedforward and attention with pre-norm and residual components for each."""
         h = x + self.mha(self.norm1(x))
         o = h + self.ff(self.norm2(h))
         return o
 
 
 class Transformer(torch.nn.Module):
+    """Stacked transformer language model with embedding, blocks, and projection head.
+
+    Args:
+        impl: Implementation backend (PyTorch or Triton).
+        n_vocab: Vocabulary size for embeddings and logits.
+        depth: Number of transformer blocks.
+        d_model: Model hidden dimension.
+        n_head: Number of attention heads.
+        d_ff: Feed-forward hidden dimension.
+        device: Optional device to initialise on.
+        dtype: Optional dtype to use.
+    """
+
     def __init__(
         self,
         impl: Impl,
@@ -146,4 +203,5 @@ class Transformer(torch.nn.Module):
         self.proj = OPS[impl]["Linear"](d_model, n_vocab, bias=False, device=device, dtype=dtype)
 
     def forward(self, idxs: Integer[torch.Tensor, "batch seq_len"]) -> Float[torch.Tensor, "batch seq_len d_model"]:
+        """Embed token ids, run transformer layers, normalize, and project to logits."""
         return self.proj(self.norm(self.layers(self.embed(idxs))))
