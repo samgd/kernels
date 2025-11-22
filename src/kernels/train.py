@@ -15,6 +15,22 @@ def train(
     epochs: int,
     max_norm: float | None = None,
 ) -> dict[str, list]:
+    """Train a model with optional grad clipping and periodic validation.
+
+    Args:
+        model: Module to train.
+        opt: Optimizer used for parameter updates.
+        lr_sched: Learning-rate scheduler stepped each iteration.
+        train_dl: DataLoader yielding (x, y) training batches.
+        valid_dl: DataLoader used to compute per-epoch validation losses.
+        loss_fn: Callable producing per-sequence loss from model outputs and targets.
+        epochs: Number of epochs to iterate over ``train_dl``/``valid_dl``.
+        max_norm: Optional gradient norm clip threshold.
+
+    Returns:
+        dict[str, list]: History containing ``losses`` (per train step), ``lrs`` (learning rate per train step),
+        ``valid_epoch_losses`` (per validation epoch), and ``norms`` (per train step) if ``max_norm`` was set.
+    """
     losses = []
     lrs = []
     norms = []
