@@ -5,6 +5,7 @@ from jaxtyping import Float
 
 
 def glorot_uniform_(weight: Float[torch.Tensor, "output_size hidden_size"]):
+    """In-place Glorot uniform initialization."""
     output_size, hidden_size = weight.shape
     bound = math.sqrt(6 / (output_size + hidden_size))
     with torch.no_grad():
@@ -13,5 +14,6 @@ def glorot_uniform_(weight: Float[torch.Tensor, "output_size hidden_size"]):
 
 
 def zero_(tensor: Float[torch.Tensor, "..."]):
+    """In-place zero initialization."""
     with torch.no_grad():
         tensor.zero_()
