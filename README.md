@@ -89,6 +89,8 @@ The forward pass of RoPE splits the `head_dim` into pairs of values and rotates 
 
 ##### Forward
 
+The "Two Pass" version was an earlier implementation that did a first pass over the logits to compute the maximum value followed by a second over them to compute the logsumexp. The "Online" version is the current implementation uses the online log-sum-exp trick (similar to FlashAttention) and requires only one pass over the logits.
+
 ![RMSNorm Forward Speed](https://github.com/samgd/kernels/blob/main/assets/cross_entropy_fwd.svg?raw=true)
 
 ##### Backward
