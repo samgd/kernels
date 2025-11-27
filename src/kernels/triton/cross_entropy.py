@@ -34,24 +34,57 @@ def cross_entropy_forward_kernel(
 ):
     batch_idx = tl.program_id(0)
 
-    # Find maximum value in row.
-    max_logits_ptr = logits_ptr + batch_idx * stride_lb
-    m = tl.full((), -float("inf"), dtype=tl.float32)
-    offsets = tl.arange(start=0, end=VOCAB_TILE_SIZE)
-    for _ in range(tl.cdiv(VOCAB_SIZE, VOCAB_TILE_SIZE)):
-        mask = offsets < VOCAB_SIZE
-        logits = tl.load(max_logits_ptr + offsets * stride_lv, mask=mask, other=-float("inf")).to(tl.float32)
-        m = tl.maximum(m, tl.max(logits, axis=0))
-        offsets += VOCAB_TILE_SIZE
-
-    # Compute logsumexp over row and store for backwards.
+    # Compute logsumexp over row using online log-sum-exp trick and store for backwards.
+    #
+    # The online trick maintains a running maximum (m) and exp sum and computes `lse = log(e^m sum(e^{x_i - m}))`. It
+    # avoids doing a separate pass over the logits to find the global max. Instead it rescales the running sum by
+    # the new global max and adds on the new exp sum.
+    #
+    # Derivation:
+    #
+    # lse = log(sum_{i=1}^{N} e^{x_i})
+    #     = log(sum_{i=1}^{K} e^{x_i} + sum_{i=K+1}^{N} e^{x_i})
+    #             ^ "first chunk"         ^ "second chunk"
+    #
+    # For the first chunk use its local max:
+    #
+    #   m1 = max_{i=1}^{K} x_i
+    #   S1 = sum_{i=1}^{K} e^{x_i - m1}
+    #   => sum_{i=1}^{K} e^{x_i} = e^{m1} S1
+    #
+    # Now let m be the global max over all elements:
+    #
+    #   m = max_{i=1}^{K} x_i = max(m1, m2)
+    #
+    # For the second chunk we can work directly relative to m:
+    #
+    #   S2 = sum_{i=K+1}^{N} e^{x_i - m}
+    #   => sum_{i=K+1}^{N} e^{x_i} = e^{m} S2
+    #
+    # The total sum is:
+    #
+    #   sum_{i=1}^{N} e^{x_i}
+    #     = e^{m1} * S1 + e^{m} S2
+    #     = e^{m} * (S1 e^{m1 - m} + S2)
+    #
+    # So:
+    #
+    #   lse = log(sum_{i=1}^{N} e^{x_i})
+    #       = log(e^{m} * ( S2 + S1 * e^{m1 - m} ))
+    #       = m + log( S2 + S1 * e^{m1 - m} )
+    #
+    # i.e. Rescale current running sum by `e^{m_old - m_new}` and compute the new exp sum using the current global max.
     lse_logits_ptr = logits_ptr + batch_idx * stride_lb
+    m = tl.full((), -float("inf"), dtype=tl.float32)
     lse = tl.full((), 0.0, dtype=tl.float32)
     offsets = tl.arange(start=0, end=VOCAB_TILE_SIZE)
     for _ in range(tl.cdiv(VOCAB_SIZE, VOCAB_TILE_SIZE)):
         mask = offsets < VOCAB_SIZE
         logits = tl.load(lse_logits_ptr + offsets * stride_lv, mask=mask, other=m).to(tl.float32)
-        lse += tl.sum(tl.where(mask, tl.exp(logits - m), 0.0), axis=0)
+        new_m = tl.maximum(m, tl.max(logits, axis=0))
+        lse *= tl.exp(m - new_m)
+        lse += tl.sum(tl.where(mask, tl.exp(logits - new_m), 0.0), axis=0)
+        m = new_m
         offsets += VOCAB_TILE_SIZE
     lse = m + tl.log(lse)
     tl.store(lse_ptr + batch_idx, lse)
