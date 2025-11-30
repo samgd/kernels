@@ -8,12 +8,12 @@ from jaxtyping import Float, Integer
 from kernels.pytorch.activation import swish as pyt_swish
 from kernels.pytorch.attention import scaled_dot_product_attention as pyt_attention
 from kernels.pytorch.norm import RMSNorm as pyt_norm
-from kernels.pytorch.rotary import RotaryEmbedding as pyt_RotaryEmbedding
+from kernels.pytorch.rotary import RotaryEmbedding as pyt_RotaryEmbedding, rotary_embedding as pyt_rotary_embedding
 from kernels.triton.activation import swish as trt_swish
 from kernels.triton.attention import scaled_dot_product_attention as trt_attention
 from kernels.triton.linear import Linear
 from kernels.triton.norm import RMSNorm as trt_norm
-from kernels.triton.rotary import RotaryEmbedding as trt_RotaryEmbedding
+from kernels.triton.rotary import RotaryEmbedding as trt_RotaryEmbedding, rotary_embedding as trt_rotary_embedding
 
 
 class Impl(StrEnum):
@@ -28,6 +28,7 @@ OPS = {
         "Linear": torch.nn.Linear,
         "RMSNorm": pyt_norm,
         "RotaryEmbedding": pyt_RotaryEmbedding,
+        "rotary_embedding": pyt_rotary_embedding,
     },
     Impl.TRITON: {
         "swish": trt_swish,
@@ -35,6 +36,7 @@ OPS = {
         "Linear": Linear,
         "RMSNorm": trt_norm,
         "RotaryEmbedding": trt_RotaryEmbedding,
+        "rotary_embedding": trt_rotary_embedding,
     },
 }
 
@@ -82,6 +84,7 @@ class CausalMHA(torch.nn.Module):
         dtype: torch.dtype | None = None,
     ):
         super().__init__()
+        self.impl = impl
         self.d_model = d_model
         self.n_head = n_head
         assert self.d_model % self.n_head == 0, f"{d_model=} must be divisible by {n_head=}"
