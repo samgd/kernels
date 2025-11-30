@@ -613,9 +613,9 @@ class FlashAttention2(torch.autograd.Function):
         V: Float[torch.Tensor, "batch kv_seq_len d"],
         is_causal: bool,
     ) -> Float[torch.Tensor, "batch q_seq_len d"]:
-        assert Q.is_contiguous()
-        assert K.is_contiguous()
-        assert V.is_contiguous()
+        Q = Q.contiguous()
+        K = K.contiguous()
+        V = V.contiguous()
 
         assert Q.dtype == K.dtype
         assert K.dtype == V.dtype
@@ -636,6 +636,7 @@ class FlashAttention2(torch.autograd.Function):
         None,
     ]:
         grad_output, *_ = grad_outputs
+        grad_output = grad_output.contiguous()  # type: ignore
         Q, K, V, out, L = ctx.saved_tensors
         dQ, dK, dV = triton_flash_attention_2_backward(Q, K, V, out, L, grad_output, ctx.is_causal)
         return dQ, dK, dV, None
