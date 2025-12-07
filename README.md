@@ -14,6 +14,8 @@ A library of transformer kernels written in Python PyTorch and Triton plus small
 - [Activation Functions](https://github.com/samgd/kernels#activation-functions)
   - [Sigmoid](https://github.com/samgd/kernels#sigmoid)
   - [Swish](https://github.com/samgd/kernels#swish)
+- [Scaling Laws](https://github.com/samgd/kernels/tree/main#scaling-law-experiments)
+  - [IsoFLOPs](https://github.com/samgd/kernels/tree/main#isoflops)
 
 ## MatMul
 
