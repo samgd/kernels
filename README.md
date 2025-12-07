@@ -1,6 +1,6 @@
 # Kernels
 
-A library of kernels written in various Python-based languages.
+A library of transformer kernels written in Python PyTorch and Triton plus small scale transformer scaling law experiments.
 
 - [MatMul](https://github.com/samgd/kernels#matmul)
 - [Attention](https://github.com/samgd/kernels#attention)
@@ -122,3 +122,9 @@ The "Two Pass" version was an earlier implementation that did a first pass over 
 ##### Backward
 
 ![Swish Backward Speed](https://github.com/samgd/kernels/blob/main/assets/swish_bwd.svg?raw=true)
+
+## Scaling Law Experiments
+
+### IsoFLOPs
+
+![IsoFLOPs](https://github.com/samgd/kernels/blob/main/assets/isoflop.svg?raw=true)
