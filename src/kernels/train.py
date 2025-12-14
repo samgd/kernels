@@ -14,6 +14,7 @@ def train(
     loss_fn: Callable[[Float[torch.Tensor, "..."], Integer[torch.Tensor, "..."]], Float[torch.Tensor, " batch"]],
     epochs: int,
     max_norm: float | None = None,
+    grad_accum: int = 1,
 ) -> dict[str, list]:
     """Train a model with optional grad clipping and periodic validation.
 
@@ -26,6 +27,7 @@ def train(
         loss_fn: Callable producing per-sequence loss from model outputs and targets.
         epochs: Number of epochs to iterate over ``train_dl``/``valid_dl``.
         max_norm: Optional gradient norm clip threshold.
+        grad_accum: Number of micro-batches to split the input batch into.
 
     Returns:
         dict[str, list]: History containing ``losses`` (per train step), ``lrs`` (learning rate per train step),
@@ -42,17 +44,22 @@ def train(
         model.train()
         with tqdm.tqdm(desc=f"epoch {epoch + 1}/{epochs}, train", total=len(train_dl)) as pbar:
             for i, (x, y) in enumerate(train_dl):
-                model.zero_grad(set_to_none=True)
+                opt.zero_grad(set_to_none=True)
 
                 x = x.to("cuda")
                 y = y.to("cuda")
 
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    out = model(x)
+                total_batch_size = x.shape[0]
+                total_loss = torch.tensor(0.0, device="cuda")
+                for x_sb, y_sb in zip(x.chunk(grad_accum, dim=0), y.chunk(grad_accum, dim=0)):
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        out = model(x_sb)
 
-                loss = loss_fn(out.flatten(end_dim=1), y.flatten()).mean()
+                    scale_factor = x_sb.shape[0] / total_batch_size
+                    loss = loss_fn(out.flatten(end_dim=1), y_sb.flatten()).mean() * scale_factor
+                    loss.backward()
 
-                loss.backward()
+                    total_loss += loss.detach()
 
                 if max_norm is not None:
                     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
@@ -61,7 +68,7 @@ def train(
                 opt.step()
                 lr_sched.step()
 
-                losses.append(loss.item())
+                losses.append(total_loss.item())
                 lrs.append(lr_sched.get_last_lr())
 
                 pbar.set_postfix_str(f"loss={losses[-1]:5.3f}")
